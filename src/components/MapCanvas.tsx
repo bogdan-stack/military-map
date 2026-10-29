@@ -6,7 +6,7 @@ import type { FeatureCollection } from "geojson";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { circlePolygon, rectPolygon } from "@/lib/geo";
 import { useMapStore } from "@/lib/store";
-import { affiliationColor, renderSymbol } from "@/lib/symbols";
+import { affiliationColor, renderControlMeasure, renderSymbol, type MapFrame } from "@/lib/symbols";
 import type { Graphic } from "@/lib/types";
 
 const STYLES: Record<string, string | maplibregl.StyleSpecification> = {
@@ -103,7 +103,7 @@ export function MapCanvas({ mapRef }: { mapRef: MutableRefObject<Map | null> }) 
     map.on("click", (event) => {
       const current = stateRef.current;
       const hits = map.queryRenderedFeatures(event.point, {
-        layers: ["graphics-fill", "graphics-line", "graphics-dashed"].filter((id) => map.getLayer(id)),
+        layers: ["graphics-fill", "graphics-line", "graphics-dashed", "measures-fill", "measures-line", "measures-dashed", "measures-label"].filter((id) => map.getLayer(id)),
       });
       if (hits.length && !current.placing && !current.options.measure) {
         const id = hits[0].properties?.id;
@@ -129,11 +129,14 @@ export function MapCanvas({ mapRef }: { mapRef: MutableRefObject<Map | null> }) 
     map.on("mouseout", () => dispatch({ type: "cursor", lngLat: null }));
     map.on("moveend", () => {
       if (!map.getSource("grid")) return;
-      setData(
-        map,
-        "grid",
-        stateRef.current.options.grid ? graticule(map) : { type: "FeatureCollection", features: [] },
-      );
+      const current = stateRef.current;
+      setData(map, "grid", current.options.grid ? graticule(map) : { type: "FeatureCollection", features: [] });
+      if (
+        map.getSource("measures") &&
+        current.graphics.some((graphic) => graphic.renderer === "symbol" && (graphic.kind === "line" || graphic.kind === "area"))
+      ) {
+        setData(map, "measures", { type: "FeatureCollection", features: measureFeatures(map, current) });
+      }
     });
 
     const host = hostRef.current;
@@ -225,7 +228,7 @@ function tint(map: Map) {
 
 function ensureLayers(map: Map) {
   const empty: FeatureCollection = { type: "FeatureCollection", features: [] };
-  for (const id of ["grid", "measure", "draft", "graphics"]) {
+  for (const id of ["grid", "measure", "draft", "graphics", "measures"]) {
     if (!map.getSource(id)) map.addSource(id, { type: "geojson", data: empty });
   }
   if (!map.getLayer("grid-line")) {
@@ -290,6 +293,66 @@ function ensureLayers(map: Map) {
       },
     });
   }
+  if (!map.getLayer("measures-fill")) {
+    map.addLayer({
+      id: "measures-fill",
+      type: "fill",
+      source: "measures",
+      filter: ["all", ["in", ["geometry-type"], ["literal", ["Polygon", "MultiPolygon"]]], ["has", "fillColor"]],
+      paint: {
+        "fill-color": ["coalesce", ["get", "fillColor"], "#000000"],
+        "fill-opacity": ["coalesce", ["get", "fillOpacity"], 0.25],
+      },
+    });
+  }
+  if (!map.getLayer("measures-line")) {
+    map.addLayer({
+      id: "measures-line",
+      type: "line",
+      source: "measures",
+      filter: ["all", ["!=", ["geometry-type"], "Point"], ["!=", ["get", "dashed"], 1]],
+      layout: { "line-cap": "round", "line-join": "round" },
+      paint: {
+        "line-color": ["case", ["==", ["get", "selected"], 1], "#e65100", ["coalesce", ["get", "strokeColor"], "#111111"]],
+        "line-width": ["case", ["==", ["get", "selected"], 1], ["+", ["coalesce", ["get", "strokeWidth"], 2], 1], ["coalesce", ["get", "strokeWidth"], 2]],
+        "line-opacity": ["coalesce", ["get", "lineOpacity"], 1],
+      },
+    });
+  }
+  if (!map.getLayer("measures-dashed")) {
+    map.addLayer({
+      id: "measures-dashed",
+      type: "line",
+      source: "measures",
+      filter: ["all", ["!=", ["geometry-type"], "Point"], ["==", ["get", "dashed"], 1]],
+      layout: { "line-cap": "butt", "line-join": "round" },
+      paint: {
+        "line-color": ["case", ["==", ["get", "selected"], 1], "#e65100", ["coalesce", ["get", "strokeColor"], "#111111"]],
+        "line-width": ["coalesce", ["get", "strokeWidth"], 2],
+        "line-opacity": ["coalesce", ["get", "lineOpacity"], 1],
+        "line-dasharray": [2, 1.4],
+      },
+    });
+  }
+  if (!map.getLayer("measures-label")) {
+    map.addLayer({
+      id: "measures-label",
+      type: "symbol",
+      source: "measures",
+      filter: ["all", ["==", ["geometry-type"], "Point"], ["has", "label"], [">", ["length", ["get", "label"]], 0]],
+      layout: {
+        "text-field": ["get", "label"],
+        "text-size": 13,
+        "text-font": ["Noto Sans Regular"],
+        "text-anchor": "center",
+      },
+      paint: {
+        "text-color": ["coalesce", ["get", "fontColor"], "#111111"],
+        "text-halo-color": "#ffffff",
+        "text-halo-width": 1.4,
+      },
+    });
+  }
   if (!map.getLayer("draft-line")) {
     map.addLayer({
       id: "draft-line",
@@ -319,6 +382,8 @@ function draw(
   markers: globalThis.Map<string, maplibregl.Marker>,
   dispatch: ReturnType<typeof useMapStore>["dispatch"],
 ) {
+  if (!map.isStyleLoaded()) return;
+  ensureLayers(map);
   if (!map.getSource("graphics")) return;
   const features: FeatureCollection["features"] = [];
   const live = new Set<string>();
@@ -335,6 +400,8 @@ function draw(
       upsertMarker(map, markers, graphic, state, selected === 1, dispatch);
       continue;
     }
+
+    if (graphic.renderer === "symbol" && (graphic.kind === "line" || graphic.kind === "area")) continue;
 
     if (isLine(graphic) && outlineOf(graphic).length >= 2) {
       const ring = outlineOf(graphic);
@@ -367,9 +434,53 @@ function draw(
   }
 
   setData(map, "graphics", { type: "FeatureCollection", features });
+  setData(map, "measures", { type: "FeatureCollection", features: measureFeatures(map, state) });
   setData(map, "draft", lineCollection(state.draft, "#e65100"));
   setData(map, "measure", lineCollection(state.measurePts, "#111"));
   setData(map, "grid", state.options.grid ? graticule(map) : { type: "FeatureCollection", features: [] });
+}
+
+function mapFrame(map: Map): MapFrame {
+  const bounds = map.getBounds();
+  const canvas = map.getCanvas();
+  return {
+    west: bounds.getWest(),
+    south: bounds.getSouth(),
+    east: bounds.getEast(),
+    north: bounds.getNorth(),
+    width: canvas.clientWidth || canvas.width,
+    height: canvas.clientHeight || canvas.height,
+  };
+}
+
+function measureFeatures(map: Map, state: ReturnType<typeof useMapStore>["state"]): FeatureCollection["features"] {
+  const frame = mapFrame(map);
+  const features: FeatureCollection["features"] = [];
+  for (const graphic of state.graphics) {
+    if (!layerVisible(graphic, state.layers)) continue;
+    if (graphic.renderer !== "symbol" || (graphic.kind !== "line" && graphic.kind !== "area")) continue;
+    if (graphic.coordinates.length < 2) continue;
+    const selected = state.selectedId === graphic.id;
+    const rendered = renderControlMeasure(graphic, state.options, frame, selected);
+    if (rendered?.length) {
+      features.push(...rendered);
+      continue;
+    }
+    const ring = outlineOf(graphic);
+    if (ring.length < 2) continue;
+    const label = [graphic.modifiers.uniqueDesignation, graphic.name].filter(Boolean).join(" · ");
+    features.push({
+      type: "Feature",
+      properties: { id: graphic.id, mil: 1, selected: selected ? 1 : 0, strokeColor: strokeOf(graphic), strokeWidth: 2, lineOpacity: 1, label: "" },
+      geometry: { type: "LineString", coordinates: ring },
+    });
+    features.push({
+      type: "Feature",
+      properties: { id: graphic.id, mil: 1, label },
+      geometry: { type: "Point", coordinates: labelPoint(ring) },
+    });
+  }
+  return features;
 }
 
 function lineCollection(coords: [number, number][], color: string): FeatureCollection {

@@ -5,7 +5,7 @@ import type { Map } from "maplibre-gl";
 import { getCatalog, groupCatalog } from "@/lib/catalog";
 import { formatDistance, formatLatLng, parseCoordinate, pathLength, ringArea } from "@/lib/geo";
 import { useMapStore } from "@/lib/store";
-import { affiliationColor, FIELD, renderSymbol, symbolAllows, TEXT_MODIFIERS } from "@/lib/symbols";
+import { affiliationColor, FIELD, renderMeasurePreview, renderSymbol, symbolAllows, TEXT_MODIFIERS } from "@/lib/symbols";
 import {
   AFFILIATIONS,
   ECHELONS,
@@ -60,8 +60,9 @@ export function SymbolThumb({ symbol, size = 48 }: { symbol: CatalogSymbol; size
     reinforced: state.galleryReinforced,
   };
   const svg = useMemo(() => {
-    const drawn = renderSymbol(synthetic(symbol, style), state.options, size, false);
-    return drawn?.svg ?? "";
+    const graphic = synthetic(symbol, style);
+    if (symbol.kind !== "point") return renderMeasurePreview(graphic, state.options) ?? "";
+    return renderSymbol(graphic, state.options, size, false)?.svg ?? "";
   }, [size, state.options, style.affiliation, style.echelon, style.feint, style.headquarters, style.reinforced, style.status, style.taskForce, symbol]);
   const [ready, setReady] = useState(false);
   useEffect(() => setReady(true), []);
@@ -73,6 +74,7 @@ export function GraphicThumb({ graphic }: { graphic: Graphic }) {
   const { state } = useMapStore();
   const svg = useMemo(() => {
     if (graphic.renderer !== "symbol") return "";
+    if (graphic.kind !== "point") return renderMeasurePreview(graphic, state.options) ?? "";
     const drawn = renderSymbol(graphic, state.options, 64, false);
     return drawn?.svg ?? "";
   }, [graphic, state.options]);
