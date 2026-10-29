@@ -3,8 +3,9 @@ import {
   MilStdIconRenderer,
   Modifiers,
   SymbolID,
+  SymbolUtilities,
 } from "@armyc2.c5isr.renderer/mil-sym-ts-web";
-import type { Affiliation, Graphic, Presence, ViewOptions } from "./types";
+import type { Affiliation, Graphic, Modifiers as ModifierText, Presence, ViewOptions } from "./types";
 
 export type DrawnSymbol = {
   svg: string;
@@ -33,14 +34,15 @@ function echelonCode(value: string) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-function headquartersCode(graphic: Pick<Graphic, "headquarters" | "taskForce">) {
-  if (graphic.headquarters && graphic.taskForce) return SymbolID.HQTFD_TaskForce_Headquarters;
-  if (graphic.headquarters) return SymbolID.HQTFD_Headquarters;
-  if (graphic.taskForce) return SymbolID.HQTFD_TaskForce;
-  return SymbolID.HQTFD_Unknown;
+function headquartersCode(graphic: Pick<Graphic, "headquarters" | "taskForce" | "feint">) {
+  let code = SymbolID.HQTFD_Unknown;
+  if (graphic.feint) code += SymbolID.HQTFD_FeintDummy;
+  if (graphic.headquarters) code += SymbolID.HQTFD_Headquarters;
+  if (graphic.taskForce) code += SymbolID.HQTFD_TaskForce;
+  return code;
 }
 
-export function buildSidc(graphic: Pick<Graphic, "basicId" | "affiliation" | "status" | "echelon" | "headquarters" | "taskForce">, standard: ViewOptions["standard"]) {
+export function buildSidc(graphic: Pick<Graphic, "basicId" | "affiliation" | "status" | "echelon" | "headquarters" | "taskForce" | "feint">, standard: ViewOptions["standard"]) {
   const basicId = (graphic.basicId || "").padEnd(8, "0").slice(0, 8);
   let sidc = BLANK;
   sidc = SymbolID.setVersion(sidc, standard === "APP6" ? SymbolID.Version_APP6D : SymbolID.Version_2525Dch1);
@@ -50,10 +52,18 @@ export function buildSidc(graphic: Pick<Graphic, "basicId" | "affiliation" | "st
   sidc = SymbolID.setHQTFD(sidc, headquartersCode(graphic));
   sidc = SymbolID.setAmplifierDescriptor(sidc, echelonCode(graphic.echelon));
   sidc = SymbolID.setEntityCode(sidc, Number(basicId.slice(2)) || 0);
+  if (!SymbolUtilities.hasModifier(sidc, Modifiers.B_ECHELON)) {
+    sidc = SymbolID.setAmplifierDescriptor(sidc, SymbolID.Echelon_Unknown);
+  }
+  const keepsIdentityAmplifier =
+    SymbolUtilities.hasModifier(sidc, Modifiers.S_HQ_STAFF_INDICATOR) ||
+    SymbolUtilities.hasModifier(sidc, Modifiers.D_TASK_FORCE_INDICATOR) ||
+    SymbolUtilities.hasModifier(sidc, Modifiers.AB_FEINT_DUMMY_INDICATOR);
+  if (!keepsIdentityAmplifier) sidc = SymbolID.setHQTFD(sidc, SymbolID.HQTFD_Unknown);
   return sidc;
 }
 
-function modifierMap(graphic: Graphic) {
+function modifierMap(graphic: Graphic, sidc: string) {
   const map = new Map<string, string>();
   const fields: [string, string][] = [
     [Modifiers.T_UNIQUE_DESIGNATION_1, graphic.modifiers.uniqueDesignation],
@@ -69,13 +79,19 @@ function modifierMap(graphic: Graphic) {
   ];
   for (const [key, value] of fields) {
     const text = value.trim();
-    if (text) map.set(key, text);
+    if (text && SymbolUtilities.hasModifier(sidc, key)) map.set(key, text);
   }
   return map;
 }
 
 function presentSymbol(svg: string, view: ViewOptions) {
-  let next = svg.replace(/<desc>[\s\S]*?<\/desc>/g, "").replace(/<metadata>[\s\S]*?<\/metadata>/g, "");
+  let next = svg
+    .replace(/<desc>[\s\S]*?<\/desc>/g, "")
+    .replace(/<metadata>[\s\S]*?<\/metadata>/g, "")
+    .replace(/\s(?:width|height)="[^"]*"/g, "");
+  next = /preserveAspectRatio=/.test(next)
+    ? next.replace(/preserveAspectRatio="[^"]*"/, 'preserveAspectRatio="xMidYMid meet"')
+    : next.replace("<svg", '<svg preserveAspectRatio="xMidYMid meet"');
   if (!view.symbolFrame) {
     next = next.replace(/<g id="0_[^"]*">[\s\S]*?<\/g>/, "");
   } else if (!view.symbolFill) {
@@ -100,10 +116,11 @@ export function renderSymbol(
 
   const attributes = new Map<string, string>();
   attributes.set(MilStdAttributes.PixelSize, String(Math.max(16, Math.round(size))));
+  attributes.set(MilStdAttributes.KeepUnitRatio, "true");
   if (iconOnly) attributes.set(MilStdAttributes.DrawAsIcon, "true");
   if (view.shadow) attributes.set(MilStdAttributes.OutlineSymbol, "true");
 
-  const drawn = MilStdIconRenderer.getInstance().RenderSVG(sidc, iconOnly ? new Map() : modifierMap(graphic), attributes);
+  const drawn = MilStdIconRenderer.getInstance().RenderSVG(sidc, iconOnly ? new Map() : modifierMap(graphic, sidc), attributes);
   if (!drawn) {
     cache.set(key, null);
     return null;
@@ -119,6 +136,32 @@ export function renderSymbol(
   cache.set(key, result);
   return result;
 }
+
+export function symbolAllows(graphic: Pick<Graphic, "renderer" | "basicId" | "affiliation" | "status" | "echelon" | "headquarters" | "taskForce" | "feint">, standard: ViewOptions["standard"], modifier: string) {
+  if (graphic.renderer !== "symbol" || !graphic.basicId) return false;
+  return SymbolUtilities.hasModifier(buildSidc(graphic, standard), modifier);
+}
+
+export const FIELD = {
+  echelon: Modifiers.B_ECHELON,
+  taskForce: Modifiers.D_TASK_FORCE_INDICATOR,
+  headquarters: Modifiers.S_HQ_STAFF_INDICATOR,
+  feint: Modifiers.AB_FEINT_DUMMY_INDICATOR,
+  reinforced: Modifiers.F_REINFORCED_REDUCED,
+};
+
+export const TEXT_MODIFIERS: { key: keyof ModifierText; label: string; modifier: string }[] = [
+  { key: "uniqueDesignation", label: "Unique designation", modifier: Modifiers.T_UNIQUE_DESIGNATION_1 },
+  { key: "higherFormation", label: "Higher formation", modifier: Modifiers.M_HIGHER_FORMATION },
+  { key: "additionalInformation", label: "Additional information", modifier: Modifiers.H_ADDITIONAL_INFO_1 },
+  { key: "staffComments", label: "Staff comments", modifier: Modifiers.G_STAFF_COMMENTS },
+  { key: "reinforcedReduced", label: "Reinforced / reduced", modifier: Modifiers.F_REINFORCED_REDUCED },
+  { key: "quantity", label: "Quantity", modifier: Modifiers.C_QUANTITY },
+  { key: "type", label: "Type", modifier: Modifiers.V_EQUIP_TYPE },
+  { key: "dtg", label: "Date-time group", modifier: Modifiers.W_DTG_1 },
+  { key: "altitudeDepth", label: "Altitude / depth", modifier: Modifiers.X_ALTITUDE_DEPTH },
+  { key: "direction", label: "Direction (°)", modifier: Modifiers.Q_DIRECTION_OF_MOVEMENT },
+];
 
 export function affiliationColor(code: string) {
   if (code === "H") return "#d32020";

@@ -47,6 +47,8 @@ export type Graphic = {
   echelon: string;
   headquarters: boolean;
   taskForce: boolean;
+  /** Feint or dummy, SIDC headquarters/task-force/dummy field. */
+  feint: boolean;
   color: string;
   coordinates: [number, number][];
   modifiers: Modifiers;
@@ -133,20 +135,20 @@ export const DEFAULT_OPTIONS: ViewOptions = {
 
 export const ECHELONS: { code: string; label: string }[] = [
   { code: "00", label: "None" },
-  { code: "11", label: "Team / crew" },
-  { code: "12", label: "Squad" },
-  { code: "13", label: "Section" },
-  { code: "14", label: "Platoon / detachment" },
-  { code: "15", label: "Company / battery / troop" },
-  { code: "16", label: "Battalion / squadron" },
-  { code: "17", label: "Regiment / group" },
-  { code: "18", label: "Brigade" },
-  { code: "21", label: "Division" },
-  { code: "22", label: "Corps / MEF" },
-  { code: "23", label: "Army" },
-  { code: "24", label: "Army group / front" },
-  { code: "25", label: "Region / theater" },
-  { code: "26", label: "Command" },
+  { code: "11", label: "Team / crew (Ø)" },
+  { code: "12", label: "Squad (•)" },
+  { code: "13", label: "Section (••)" },
+  { code: "14", label: "Platoon / detachment (•••)" },
+  { code: "15", label: "Company / battery / troop (I)" },
+  { code: "16", label: "Battalion / squadron (II)" },
+  { code: "17", label: "Regiment / group (III)" },
+  { code: "18", label: "Brigade (X)" },
+  { code: "21", label: "Division (XX)" },
+  { code: "22", label: "Corps / MEF (XXX)" },
+  { code: "23", label: "Army (XXXX)" },
+  { code: "24", label: "Army group / front (XXXXX)" },
+  { code: "25", label: "Region / theater (XXXXXX)" },
+  { code: "26", label: "Command (++)" },
 ];
 
 export const AFFILIATIONS: { code: Affiliation; label: string }[] = [

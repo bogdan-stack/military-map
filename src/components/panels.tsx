@@ -1,22 +1,34 @@
 "use client";
 
-import { useMemo, useState, type MutableRefObject } from "react";
+import { useEffect, useMemo, useState, type MutableRefObject } from "react";
 import type { Map } from "maplibre-gl";
 import { getCatalog, groupCatalog } from "@/lib/catalog";
 import { formatDistance, formatLatLng, parseCoordinate, pathLength, ringArea } from "@/lib/geo";
 import { useMapStore } from "@/lib/store";
-import { affiliationColor, renderSymbol } from "@/lib/symbols";
+import { affiliationColor, FIELD, renderSymbol, symbolAllows, TEXT_MODIFIERS } from "@/lib/symbols";
 import {
   AFFILIATIONS,
   ECHELONS,
   EMPTY_MODIFIERS,
+  type Affiliation,
   type CatalogSymbol,
   type Graphic,
   type SectionId,
   type ViewOptions,
 } from "@/lib/types";
 
-function synthetic(symbol: CatalogSymbol): Graphic {
+function synthetic(
+  symbol: CatalogSymbol,
+  style: {
+    affiliation: Affiliation;
+    status: Graphic["status"];
+    echelon: string;
+    headquarters: boolean;
+    taskForce: boolean;
+    feint: boolean;
+    reinforced: string;
+  },
+): Graphic {
   return {
     id: symbol.id,
     layerId: "",
@@ -24,24 +36,36 @@ function synthetic(symbol: CatalogSymbol): Graphic {
     renderer: "symbol",
     kind: symbol.kind,
     basicId: symbol.basicId,
-    affiliation: "F",
-    status: "P",
-    echelon: "00",
-    headquarters: false,
-    taskForce: false,
-    color: "#1f4bff",
+    affiliation: style.affiliation,
+    status: style.status,
+    echelon: style.echelon,
+    headquarters: style.headquarters,
+    taskForce: style.taskForce,
+    feint: style.feint,
+    color: affiliationColor(style.affiliation),
     coordinates: [],
-    modifiers: { ...EMPTY_MODIFIERS },
+    modifiers: { ...EMPTY_MODIFIERS, reinforcedReduced: style.reinforced },
   };
 }
 
-export function SymbolThumb({ symbol, size = 40 }: { symbol: CatalogSymbol; size?: number }) {
+export function SymbolThumb({ symbol, size = 48 }: { symbol: CatalogSymbol; size?: number }) {
   const { state } = useMapStore();
+  const style = {
+    affiliation: state.galleryAffiliation,
+    status: state.galleryStatus,
+    echelon: state.galleryEchelon,
+    headquarters: state.galleryHeadquarters,
+    taskForce: state.galleryTaskForce,
+    feint: state.galleryFeint,
+    reinforced: state.galleryReinforced,
+  };
   const svg = useMemo(() => {
-    const drawn = renderSymbol(synthetic(symbol), state.options, size, true);
+    const drawn = renderSymbol(synthetic(symbol, style), state.options, size, false);
     return drawn?.svg ?? "";
-  }, [size, state.options, symbol]);
-  if (!svg) return null;
+  }, [size, state.options, style.affiliation, style.echelon, style.feint, style.headquarters, style.reinforced, style.status, style.taskForce, symbol]);
+  const [ready, setReady] = useState(false);
+  useEffect(() => setReady(true), []);
+  if (!ready || !svg) return <span className="thumb-svg" />;
   return <span className="thumb-svg" dangerouslySetInnerHTML={{ __html: svg }} />;
 }
 
@@ -49,10 +73,12 @@ export function GraphicThumb({ graphic }: { graphic: Graphic }) {
   const { state } = useMapStore();
   const svg = useMemo(() => {
     if (graphic.renderer !== "symbol") return "";
-    const drawn = renderSymbol(graphic, state.options, 36, true);
+    const drawn = renderSymbol(graphic, state.options, 64, false);
     return drawn?.svg ?? "";
   }, [graphic, state.options]);
-  if (!svg) {
+  const [ready, setReady] = useState(false);
+  useEffect(() => setReady(true), []);
+  if (!ready || !svg) {
     if (graphic.renderer === "symbol") return null;
     return (
       <span className="thumb-fallback" style={{ color: graphic.color }}>
@@ -126,6 +152,84 @@ export function GalleryPanel() {
           </button>
         ))}
       </div>
+      <div className="side-row" role="group" aria-label="Standard identity">
+        {AFFILIATIONS.map((item) => (
+          <button
+            key={item.code}
+            type="button"
+            className={state.galleryAffiliation === item.code ? "on" : ""}
+            style={{ borderColor: affiliationColor(item.code), color: affiliationColor(item.code) }}
+            onClick={() => dispatch({ type: "gallery-style", patch: { galleryAffiliation: item.code } })}
+          >
+            {item.code === "H" ? "Enemy" : item.label}
+          </button>
+        ))}
+      </div>
+      <div className="style-grid">
+        <label>
+          Unit size
+          <select
+            value={state.galleryEchelon}
+            onChange={(event) => dispatch({ type: "gallery-style", patch: { galleryEchelon: event.target.value } })}
+          >
+            {ECHELONS.map((item) => (
+              <option key={item.code} value={item.code}>
+                {item.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Status
+          <select
+            value={state.galleryStatus}
+            onChange={(event) =>
+              dispatch({ type: "gallery-style", patch: { galleryStatus: event.target.value as Graphic["status"] } })
+            }
+          >
+            <option value="P">Present</option>
+            <option value="A">Anticipated</option>
+          </select>
+        </label>
+        <div className="style-checks">
+          <label>
+            <input
+              type="checkbox"
+              checked={state.galleryHeadquarters}
+              onChange={(event) => dispatch({ type: "gallery-style", patch: { galleryHeadquarters: event.target.checked } })}
+            />
+            Headquarters
+          </label>
+          <label>
+            <input
+              type="checkbox"
+              checked={state.galleryTaskForce}
+              onChange={(event) => dispatch({ type: "gallery-style", patch: { galleryTaskForce: event.target.checked } })}
+            />
+            Task force
+          </label>
+          <label>
+            <input
+              type="checkbox"
+              checked={state.galleryFeint}
+              onChange={(event) => dispatch({ type: "gallery-style", patch: { galleryFeint: event.target.checked } })}
+            />
+            Feint / dummy
+          </label>
+          <label>
+            Reinforced
+            <select
+              value={state.galleryReinforced}
+              onChange={(event) => dispatch({ type: "gallery-style", patch: { galleryReinforced: event.target.value } })}
+            >
+              <option value="">None</option>
+              <option value="+">Reinforced (+)</option>
+              <option value="-">Reduced (−)</option>
+              <option value="±">Reinforced and reduced (±)</option>
+            </select>
+          </label>
+        </div>
+      </div>
       <div className="generic-row">
         {(
           [
@@ -149,7 +253,7 @@ export function GalleryPanel() {
       </div>
       <div className="panel-scroll">
         {query ? (
-          <SymbolGrid symbols={symbols} placingId={placingId} favorites={state.favorites} />
+          <SymbolGrid symbols={symbols} placingId={placingId} favorites={state.favorites} affiliation={state.galleryAffiliation} />
         ) : (
           [...(grouped || [])].map(([category, subs]) => {
             const catKey = `${section}:${category}`;
@@ -168,12 +272,12 @@ export function GalleryPanel() {
                     return (
                       <>
                         {singles.length > 0 && (
-                          <SymbolGrid symbols={singles} placingId={placingId} favorites={state.favorites} />
+                          <SymbolGrid symbols={singles} placingId={placingId} favorites={state.favorites} affiliation={state.galleryAffiliation} />
                         )}
                         {groups.map(([sub, items]) => {
                           if (sub === category) {
                             return (
-                              <SymbolGrid key={`${catKey}:${sub}`} symbols={items} placingId={placingId} favorites={state.favorites} />
+                              <SymbolGrid key={`${catKey}:${sub}`} symbols={items} placingId={placingId} favorites={state.favorites} affiliation={state.galleryAffiliation} />
                             );
                           }
                           const subKey = `${catKey}:${sub}`;
@@ -184,7 +288,9 @@ export function GalleryPanel() {
                                 <span>{sub}</span>
                                 <span>{subOpen ? "▾" : "▸"}</span>
                               </button>
-                              {subOpen && <SymbolGrid symbols={items} placingId={placingId} favorites={state.favorites} />}
+                              {subOpen && (
+                                <SymbolGrid symbols={items} placingId={placingId} favorites={state.favorites} affiliation={state.galleryAffiliation} />
+                              )}
                             </div>
                           );
                         })}
@@ -205,10 +311,12 @@ function SymbolGrid({
   symbols,
   placingId,
   favorites,
+  affiliation,
 }: {
   symbols: CatalogSymbol[];
   placingId: string | null;
   favorites: string[];
+  affiliation: Affiliation;
 }) {
   const { dispatch } = useMapStore();
   return (
@@ -217,8 +325,9 @@ function SymbolGrid({
         <button
           key={symbol.id}
           type="button"
-          className={`symbol-cell${placingId === symbol.id ? " on" : ""}`}
+          className={`symbol-cell side-${affiliation.toLowerCase()}${placingId === symbol.id ? " on" : ""}`}
           title={symbol.name}
+          aria-label={symbol.name}
           onClick={() => dispatch({ type: "place-symbol", symbol })}
           onContextMenu={(event) => {
             event.preventDefault();
@@ -286,35 +395,51 @@ export function EditorPanel() {
                   <option value="A">Anticipated</option>
                 </select>
               </label>
-              <label className="opt-row">
-                Echelon
-                <select
-                  value={graphic.echelon}
-                  onChange={(event) => dispatch({ type: "patch", id: graphic.id, patch: { echelon: event.target.value } })}
-                >
-                  {ECHELONS.map((item) => (
-                    <option key={item.code} value={item.code}>
-                      {item.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="check-row">
-                <input
-                  type="checkbox"
-                  checked={graphic.headquarters}
-                  onChange={(event) => dispatch({ type: "patch", id: graphic.id, patch: { headquarters: event.target.checked } })}
-                />
-                Headquarters
-              </label>
-              <label className="check-row">
-                <input
-                  type="checkbox"
-                  checked={graphic.taskForce}
-                  onChange={(event) => dispatch({ type: "patch", id: graphic.id, patch: { taskForce: event.target.checked } })}
-                />
-                Task force
-              </label>
+              {symbolAllows(graphic, state.options.standard, FIELD.echelon) && (
+                <label className="opt-row">
+                  Unit size
+                  <select
+                    value={graphic.echelon}
+                    onChange={(event) => dispatch({ type: "patch", id: graphic.id, patch: { echelon: event.target.value } })}
+                  >
+                    {ECHELONS.map((item) => (
+                      <option key={item.code} value={item.code}>
+                        {item.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+              {symbolAllows(graphic, state.options.standard, FIELD.headquarters) && (
+                <label className="check-row">
+                  <input
+                    type="checkbox"
+                    checked={graphic.headquarters}
+                    onChange={(event) => dispatch({ type: "patch", id: graphic.id, patch: { headquarters: event.target.checked } })}
+                  />
+                  Headquarters
+                </label>
+              )}
+              {symbolAllows(graphic, state.options.standard, FIELD.taskForce) && (
+                <label className="check-row">
+                  <input
+                    type="checkbox"
+                    checked={graphic.taskForce}
+                    onChange={(event) => dispatch({ type: "patch", id: graphic.id, patch: { taskForce: event.target.checked } })}
+                  />
+                  Task force
+                </label>
+              )}
+              {symbolAllows(graphic, state.options.standard, FIELD.feint) && (
+                <label className="check-row">
+                  <input
+                    type="checkbox"
+                    checked={graphic.feint}
+                    onChange={(event) => dispatch({ type: "patch", id: graphic.id, patch: { feint: event.target.checked } })}
+                  />
+                  Feint / dummy
+                </label>
+              )}
             </>
           )}
           {graphic.renderer === "generic" && (
@@ -343,30 +468,33 @@ export function EditorPanel() {
 }
 
 function ModifierFields({ graphic }: { graphic: Graphic }) {
-  const { dispatch } = useMapStore();
-  const fields: { key: keyof Graphic["modifiers"]; label: string }[] = [
-    { key: "uniqueDesignation", label: "Unique designation" },
-    { key: "higherFormation", label: "Higher formation" },
-    { key: "additionalInformation", label: "Additional information" },
-    { key: "staffComments", label: "Staff comments" },
-    { key: "reinforcedReduced", label: "Reinforced / reduced" },
-    { key: "quantity", label: "Quantity" },
-    { key: "type", label: "Type" },
-    { key: "dtg", label: "Date-time group" },
-    { key: "altitudeDepth", label: "Altitude / depth" },
-    { key: "direction", label: "Direction (°)" },
-  ];
+  const { state, dispatch } = useMapStore();
+  const fields = TEXT_MODIFIERS.filter((field) => symbolAllows(graphic, state.options.standard, field.modifier));
   return (
     <>
       {fields.map((field) => (
         <label key={field.key} className="stack-field">
           {field.label}
-          <input
-            value={graphic.modifiers[field.key]}
-            onChange={(event) =>
-              dispatch({ type: "modifiers", id: graphic.id, modifiers: { [field.key]: event.target.value } })
-            }
-          />
+          {field.key === "reinforcedReduced" ? (
+            <select
+              value={["", "+", "-", "±"].includes(graphic.modifiers.reinforcedReduced) ? graphic.modifiers.reinforcedReduced : ""}
+              onChange={(event) =>
+                dispatch({ type: "modifiers", id: graphic.id, modifiers: { reinforcedReduced: event.target.value } })
+              }
+            >
+              <option value="">None</option>
+              <option value="+">Reinforced (+)</option>
+              <option value="-">Reduced (−)</option>
+              <option value="±">Reinforced and reduced (±)</option>
+            </select>
+          ) : (
+            <input
+              value={graphic.modifiers[field.key]}
+              onChange={(event) =>
+                dispatch({ type: "modifiers", id: graphic.id, modifiers: { [field.key]: event.target.value } })
+              }
+            />
+          )}
         </label>
       ))}
     </>
@@ -518,6 +646,7 @@ function genericGraphic(layerId: string, kind: Graphic["kind"], name: string, co
     echelon: "00",
     headquarters: false,
     taskForce: false,
+    feint: false,
     color: "#1565c0",
     coordinates,
     modifiers: { ...EMPTY_MODIFIERS },

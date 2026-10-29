@@ -15,7 +15,9 @@ import {
   AFFILIATIONS,
   DEFAULT_OPTIONS,
   EMPTY_MODIFIERS,
+  type Affiliation,
   type CatalogSymbol,
+  type Presence,
   type Graphic,
   type LeftPanel,
   type MapLayer,
@@ -52,6 +54,13 @@ export type MapState = {
   cursor: [number, number] | null;
   query: string;
   gallerySection: SectionId;
+  galleryAffiliation: Affiliation;
+  galleryEchelon: string;
+  galleryStatus: Presence;
+  galleryHeadquarters: boolean;
+  galleryTaskForce: boolean;
+  galleryFeint: boolean;
+  galleryReinforced: string;
   openGroups: Record<string, boolean>;
 };
 
@@ -84,6 +93,21 @@ type Action =
   | { type: "cursor"; lngLat: [number, number] | null }
   | { type: "query"; query: string }
   | { type: "section"; section: SectionId }
+  | {
+      type: "gallery-style";
+      patch: Partial<
+        Pick<
+          MapState,
+          | "galleryAffiliation"
+          | "galleryEchelon"
+          | "galleryStatus"
+          | "galleryHeadquarters"
+          | "galleryTaskForce"
+          | "galleryFeint"
+          | "galleryReinforced"
+        >
+      >;
+    }
   | { type: "toggle-group"; key: string }
   | { type: "clear-measure" }
   | { type: "import-graphics"; graphics: Graphic[] };
@@ -133,6 +157,13 @@ export const initialState: MapState = {
   cursor: null,
   query: "",
   gallerySection: "formations",
+  galleryAffiliation: "F",
+  galleryEchelon: "15",
+  galleryStatus: "P",
+  galleryHeadquarters: false,
+  galleryTaskForce: false,
+  galleryFeint: false,
+  galleryReinforced: "",
   openGroups: { "formations:Movement and Maneuver": true, "formations:Movement and Maneuver:Infantry": true },
 };
 
@@ -153,14 +184,15 @@ function makeGraphic(state: MapState, coordinates: [number, number][]): Graphic 
       renderer: "symbol",
       kind: symbol.kind,
       basicId: symbol.basicId,
-      affiliation: "F",
-      status: "P",
-      echelon: "00",
-      headquarters: false,
-      taskForce: false,
-      color: affiliationColor("F"),
+      affiliation: state.galleryAffiliation,
+      status: state.galleryStatus,
+      echelon: state.galleryEchelon,
+      headquarters: state.galleryHeadquarters,
+      taskForce: state.galleryTaskForce,
+      feint: state.galleryFeint,
+      color: affiliationColor(state.galleryAffiliation),
       coordinates,
-      modifiers: { ...EMPTY_MODIFIERS },
+      modifiers: { ...EMPTY_MODIFIERS, reinforcedReduced: state.galleryReinforced },
     };
   }
   const kind = placing && placing.mode === "generic" ? placing.kind : "pin";
@@ -177,6 +209,7 @@ function makeGraphic(state: MapState, coordinates: [number, number][]): Graphic 
     echelon: "00",
     headquarters: false,
     taskForce: false,
+    feint: false,
     color: "#1565c0",
     coordinates,
     modifiers: {
@@ -380,6 +413,8 @@ function reducer(state: MapState, action: Action): MapState {
       return { ...state, query: action.query };
     case "section":
       return { ...state, gallerySection: action.section, query: action.section === "favorites" ? state.query : state.query };
+    case "gallery-style":
+      return { ...state, ...action.patch };
     case "toggle-group":
       return {
         ...state,
@@ -412,7 +447,7 @@ export function MapStoreProvider({ children }: { children: ReactNode }) {
           type: "hydrate",
           state: {
             layers: saved.layers?.length ? saved.layers : initialState.layers,
-            graphics: saved.graphics || [],
+            graphics: (saved.graphics || []).map((graphic) => ({ ...graphic, feint: Boolean(graphic.feint) })),
             activeLayerId: saved.activeLayerId || initialState.activeLayerId,
             options: { ...DEFAULT_OPTIONS, ...(saved.options || {}) },
             favorites: saved.favorites || [],

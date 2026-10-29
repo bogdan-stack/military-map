@@ -58,7 +58,12 @@ function Shell() {
     return () => window.removeEventListener("keydown", onKey);
   }, [dispatch, state.selectedId]);
 
-  const hint = placementHint(state.placing, state.options.measure, state.layers.find((l) => l.id === state.activeLayerId)?.locked);
+  const hint = placementHint(
+    state.placing,
+    state.options.measure,
+    state.layers.find((l) => l.id === state.activeLayerId)?.locked,
+    state.galleryAffiliation,
+  );
 
   return (
     <div className={`app${state.options.theme === "dark" ? " dark" : ""}`}>
@@ -198,13 +203,15 @@ function placementHint(
   placing: ReturnType<typeof useMapStore>["state"]["placing"],
   measure: boolean,
   locked?: boolean,
+  affiliation?: ReturnType<typeof useMapStore>["state"]["galleryAffiliation"],
 ) {
   if (measure) return "Measure: click the map to add points. Esc clears the measurement.";
   if (!placing) return null;
   if (locked) return "The active layer is locked. Unlock it in Layers before drawing.";
   const kind = placing.mode === "symbol" ? placing.symbol.kind : placing.kind;
   const name = placing.mode === "symbol" ? placing.symbol.name : placing.name;
-  if (kind === "point" || kind === "pin" || kind === "text") return `Click the map to place ${name}. Esc cancels.`;
+  const side = placing.mode === "symbol" ? (affiliation === "H" ? "enemy " : affiliation === "N" ? "neutral " : affiliation === "U" ? "unknown " : "") : "";
+  if (kind === "point" || kind === "pin" || kind === "text") return `Click the map to place ${side}${name}. Esc cancels.`;
   if (kind === "rect") return "Click one corner, then the opposite corner.";
   if (kind === "circle") return "Click the center, then a point on the edge.";
   if (kind === "area") return `Click to add vertices of ${name}. Double-click or Enter to close the area.`;
