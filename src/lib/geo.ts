@@ -141,6 +141,76 @@ export function circlePolygon(center: [number, number], edge: [number, number], 
   return coords;
 }
 
+/** Kidney outline. The second point is the far end and sets the length and direction. */
+export function beanPolygon(center: [number, number], edge: [number, number], steps = 72): [number, number][] {
+  const radius = haversine(center, edge);
+  if (radius < 1) return [];
+  const bearing0 = (bearingDeg(center, edge) * Math.PI) / 180;
+  const lat = (center[1] * Math.PI) / 180;
+  const lng = (center[0] * Math.PI) / 180;
+  const coords: [number, number][] = [];
+  for (let i = 0; i <= steps; i++) {
+    const t = (2 * Math.PI * i) / steps;
+    const along = Math.cos(t);
+    const across = 0.56 * Math.sin(t);
+    const notch = across > 0 ? 0.2 * Math.exp(-3.2 * along * along) : 0;
+    const lx = along;
+    const ly = across - notch;
+    const dist = radius * Math.hypot(lx, ly);
+    const bearing = bearing0 - Math.atan2(ly, lx);
+    const angDist = dist / 6371008.8;
+    const lat2 = Math.asin(Math.sin(lat) * Math.cos(angDist) + Math.cos(lat) * Math.sin(angDist) * Math.cos(bearing));
+    const lng2 =
+      lng +
+      Math.atan2(
+        Math.sin(bearing) * Math.sin(angDist) * Math.cos(lat),
+        Math.cos(angDist) - Math.sin(lat) * Math.sin(lat2),
+      );
+    coords.push([(lng2 * 180) / Math.PI, (lat2 * 180) / Math.PI]);
+  }
+  return coords;
+}
+
+const ECHELON_MARK: Record<string, string> = {
+  "11": "Ø",
+  "12": "•",
+  "13": "••",
+  "14": "•••",
+  "15": "I",
+  "16": "II",
+  "17": "III",
+  "18": "X",
+  "21": "XX",
+  "22": "XXX",
+  "23": "XXXX",
+  "24": "XXXXX",
+  "25": "XXXXXX",
+  "26": "++",
+};
+
+/** Unit-size mark drawn at the back of a bean. */
+export function beanModifier(echelon: string) {
+  return ECHELON_MARK[echelon] ?? "";
+}
+
+/** A point just behind the rear tip, opposite the end the second click set. */
+export function beanBack(center: [number, number], edge: [number, number], extend = 1.15): [number, number] {
+  const radius = haversine(center, edge) * extend;
+  if (radius < 1) return center;
+  const bearing = ((bearingDeg(center, edge) + 180) * Math.PI) / 180;
+  const lat = (center[1] * Math.PI) / 180;
+  const lng = (center[0] * Math.PI) / 180;
+  const angDist = radius / 6371008.8;
+  const lat2 = Math.asin(Math.sin(lat) * Math.cos(angDist) + Math.cos(lat) * Math.sin(angDist) * Math.cos(bearing));
+  const lng2 =
+    lng +
+    Math.atan2(
+      Math.sin(bearing) * Math.sin(angDist) * Math.cos(lat),
+      Math.cos(angDist) - Math.sin(lat) * Math.sin(lat2),
+    );
+  return [(lng2 * 180) / Math.PI, (lat2 * 180) / Math.PI];
+}
+
 export function rectPolygon(a: [number, number], b: [number, number]): [number, number][] {
   return [
     [a[0], a[1]],

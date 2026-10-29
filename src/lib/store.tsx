@@ -10,7 +10,7 @@ import {
   type Dispatch,
   type ReactNode,
 } from "react";
-import { affiliationColor, centroid, defaultModifiers, symbolContract } from "./symbols";
+import { affiliationColor, centroid, defaultModifiers, frameColor, symbolContract } from "./symbols";
 import {
   AFFILIATIONS,
   DEFAULT_OPTIONS,
@@ -234,6 +234,7 @@ function makeGraphic(state: MapState, coordinates: [number, number][]): Graphic 
   }
   const kind = placing && placing.mode === "generic" ? placing.kind : "pin";
   const name = placing && placing.mode === "generic" ? placing.name : "Mark";
+  const bean = kind === "bean";
   return {
     id,
     layerId: state.activeLayerId,
@@ -241,13 +242,13 @@ function makeGraphic(state: MapState, coordinates: [number, number][]): Graphic 
     renderer: "generic",
     kind,
     basicId: "",
-    affiliation: "F",
+    affiliation: bean ? state.galleryAffiliation : "F",
     status: "P",
-    echelon: "00",
+    echelon: bean ? state.galleryEchelon : "00",
     headquarters: false,
     taskForce: false,
     feint: false,
-    color: "#1565c0",
+    color: bean ? frameColor(state.galleryAffiliation) : "#1565c0",
     coordinates,
     modifiers: {
       ...EMPTY_MODIFIERS,
@@ -311,7 +312,7 @@ function reducer(state: MapState, action: Action): MapState {
       }
       const kind = state.placing.kind;
       if (kind === "pin" || kind === "text") return commit(state, [point]);
-      if ((kind === "rect" || kind === "circle") && state.draft.length >= 1) {
+      if ((kind === "rect" || kind === "circle" || kind === "bean") && state.draft.length >= 1) {
         return commit(state, [state.draft[0], point]);
       }
       return { ...state, draft: [...state.draft, point] };
@@ -418,6 +419,7 @@ function reducer(state: MapState, action: Action): MapState {
           if (graphic.id !== action.id) return graphic;
           const next = { ...graphic, ...patch };
           if (patch.affiliation && graphic.renderer === "symbol") next.color = affiliationColor(patch.affiliation);
+          if (patch.affiliation && graphic.kind === "bean") next.color = frameColor(patch.affiliation);
           return next;
         }),
       };

@@ -274,8 +274,9 @@ export type MapFrame = {
   height: number;
 };
 
-/** Formations keep their fixed frame. Every other symbol can be resized after it is drawn. */
-export function canScaleGraphic(graphic: Pick<Graphic, "renderer" | "basicId">) {
+/** Formations keep their fixed frame. Every other symbol, and the bean, can be resized after it is drawn. */
+export function canScaleGraphic(graphic: Pick<Graphic, "renderer" | "basicId"> & { kind?: string }) {
+  if (graphic.kind === "bean") return true;
   return graphic.renderer === "symbol" && Boolean(graphic.basicId) && sectionOfBasicId(graphic.basicId) !== "formations";
 }
 
@@ -333,6 +334,14 @@ export function shownCoordinates(graphic: Graphic): [number, number][] {
   const adjustable = canScaleGraphic(graphic);
   const scale = adjustable ? graphicScale(graphic) : 1;
   const rotation = adjustable ? graphicRotation(graphic) : 0;
+  if (graphic.kind === "bean" && graphic.coordinates.length >= 2) {
+    const origin = graphic.coordinates[0];
+    const edge = graphic.coordinates[1];
+    if (scale === 1 && rotation === 0) return [origin, edge];
+    const scaled: [number, number] =
+      scale === 1 ? edge : [origin[0] + (edge[0] - origin[0]) * scale, origin[1] + (edge[1] - origin[1]) * scale];
+    return [origin, rotateAround(origin, scaled, -rotation)];
+  }
   if (graphic.coordinates.length < 2 || (scale === 1 && rotation === 0)) return graphic.coordinates;
   const origin = centroid(graphic.coordinates);
   return graphic.coordinates.map((point) => {
@@ -352,11 +361,12 @@ export function toBasePoint(coordinates: [number, number][], scale: number, rota
 
 /** A grab point just outside the symbol, along its clockwise heading. */
 export function rotationHandlePosition(graphic: Graphic): [number, number] {
-  const origin = centroid(graphic.coordinates);
+  const bean = graphic.kind === "bean" && graphic.coordinates.length >= 2;
+  const origin = bean ? graphic.coordinates[0] : centroid(graphic.coordinates);
   const scale = canScaleGraphic(graphic) ? graphicScale(graphic) : 1;
   const kx = eastScale(origin[1]);
   let reach = 0;
-  for (const point of graphic.coordinates) {
+  for (const point of bean ? [graphic.coordinates[1]] : graphic.coordinates) {
     const dist = Math.hypot((point[0] - origin[0]) * kx * scale, (point[1] - origin[1]) * scale);
     if (dist > reach) reach = dist;
   }

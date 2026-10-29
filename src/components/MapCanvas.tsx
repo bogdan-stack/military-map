@@ -1,10 +1,10 @@
 "use client";
 
 import { useEffect, useRef, type MutableRefObject } from "react";
-import maplibregl, { type GeoJSONSource, type Map } from "maplibre-gl";
+import maplibregl, { type ExpressionSpecification, type GeoJSONSource, type Map } from "maplibre-gl";
 import type { FeatureCollection } from "geojson";
 import "maplibre-gl/dist/maplibre-gl.css";
-import { circlePolygon, rectPolygon } from "@/lib/geo";
+import { beanBack, beanModifier, beanPolygon, circlePolygon, rectPolygon } from "@/lib/geo";
 import { useMapStore } from "@/lib/store";
 import { affiliationColor, bearingFromNorth, canScaleGraphic, centroid, defaultModifiers, frameColor, graphicRotation, graphicScale, placingIsMulti, renderControlMeasure, renderSymbol, rotationHandlePosition, shownCoordinates, symbolContract, toBasePoint, type MapFrame } from "@/lib/symbols";
 import type { Graphic } from "@/lib/types";
@@ -41,6 +41,10 @@ function outlineOf(graphic: Graphic): [number, number][] {
   if (graphic.kind === "circle" && graphic.coordinates.length >= 2) {
     return circlePolygon(graphic.coordinates[0], graphic.coordinates[1]);
   }
+  if (graphic.kind === "bean" && graphic.coordinates.length >= 2) {
+    const [center, edge] = shownCoordinates(graphic);
+    return beanPolygon(center, edge);
+  }
   if (graphic.kind === "area" && graphic.coordinates.length >= 3) {
     const ring = graphic.coordinates;
     const first = ring[0];
@@ -56,7 +60,7 @@ function isArea(graphic: Graphic) {
 }
 
 function isLine(graphic: Graphic) {
-  return graphic.kind === "line" || isArea(graphic);
+  return graphic.kind === "line" || graphic.kind === "bean" || isArea(graphic);
 }
 
 function labelPoint(coords: [number, number][]): [number, number] {
@@ -67,8 +71,17 @@ function labelPoint(coords: [number, number][]): [number, number] {
 }
 
 function strokeOf(graphic: Graphic) {
+  if (graphic.kind === "bean") return frameColor(graphic.affiliation);
   return graphic.renderer === "generic" ? graphic.color : frameColor(graphic.affiliation);
 }
+
+function draftStroke(state: { placing: ReturnType<typeof useMapStore>["state"]["placing"]; galleryAffiliation: string }) {
+  if (state.placing?.mode === "generic" && state.placing.kind === "bean") return frameColor(state.galleryAffiliation);
+  return "#e65100";
+}
+
+const GRAPHIC_LINE_COLOR: ExpressionSpecification = ["case", ["==", ["get", "selected"], 1], "#e65100", ["get", "color"]];
+const GRAPHIC_LINE_WIDTH: ExpressionSpecification = ["case", ["==", ["get", "selected"], 1], 3.5, ["coalesce", ["get", "lineWidth"], 2]];
 
 export function MapCanvas({ mapRef, mcoo }: { mapRef: MutableRefObject<Map | null>; mcoo: McooHatchView }) {
   const hostRef = useRef<HTMLDivElement>(null);
@@ -217,7 +230,7 @@ export function MapCanvas({ mapRef, mcoo }: { mapRef: MutableRefObject<Map | nul
       if (map.getSource("measures")) {
         const vectors = placementVectors(map, current);
         setData(map, "measures", { type: "FeatureCollection", features: vectors.measures });
-        setData(map, "draft", lineCollection(vectors.draft, "#e65100"));
+        setData(map, "draft", lineCollection(vectors.draft, draftStroke(current)));
       }
     });
 
@@ -281,7 +294,8 @@ export function MapCanvas({ mapRef, mcoo }: { mapRef: MutableRefObject<Map | nul
     if (!state.placing) return;
     const vectors = placementVectors(map, state);
     setData(map, "measures", { type: "FeatureCollection", features: vectors.measures });
-    setData(map, "draft", lineCollection(vectors.draft, "#e65100"));
+    if (map.getLayer("draft-line")) map.setPaintProperty("draft-line", "line-color", draftStroke(state));
+    setData(map, "draft", lineCollection(vectors.draft, draftStroke(state)));
   }, [
     mapRef,
     state.activeLayerId,
@@ -365,10 +379,14 @@ function ensureLayers(map: Map) {
       source: "graphics",
       filter: ["all", ["!=", ["geometry-type"], "Point"], ["!=", ["get", "dashed"], 1]],
       paint: {
-        "line-color": ["case", ["==", ["get", "selected"], 1], "#e65100", ["get", "color"]],
-        "line-width": ["case", ["==", ["get", "selected"], 1], 3.5, 2],
+        "line-color": GRAPHIC_LINE_COLOR,
+        "line-width": GRAPHIC_LINE_WIDTH,
       },
     });
+  }
+  if (map.getLayer("graphics-line")) {
+    map.setPaintProperty("graphics-line", "line-color", GRAPHIC_LINE_COLOR);
+    map.setPaintProperty("graphics-line", "line-width", GRAPHIC_LINE_WIDTH);
   }
   if (!map.getLayer("graphics-dashed")) {
     map.addLayer({
@@ -377,11 +395,15 @@ function ensureLayers(map: Map) {
       source: "graphics",
       filter: ["all", ["!=", ["geometry-type"], "Point"], ["==", ["get", "dashed"], 1]],
       paint: {
-        "line-color": ["case", ["==", ["get", "selected"], 1], "#e65100", ["get", "color"]],
-        "line-width": ["case", ["==", ["get", "selected"], 1], 3.5, 2],
+        "line-color": GRAPHIC_LINE_COLOR,
+        "line-width": GRAPHIC_LINE_WIDTH,
         "line-dasharray": [2, 1.4],
       },
     });
+  }
+  if (map.getLayer("graphics-dashed")) {
+    map.setPaintProperty("graphics-dashed", "line-color", GRAPHIC_LINE_COLOR);
+    map.setPaintProperty("graphics-dashed", "line-width", GRAPHIC_LINE_WIDTH);
   }
   if (!map.getLayer("graphics-label")) {
     map.addLayer({
@@ -391,17 +413,33 @@ function ensureLayers(map: Map) {
       filter: ["==", ["geometry-type"], "Point"],
       layout: {
         "text-field": ["get", "label"],
-        "text-size": 12,
+        "text-size": ["coalesce", ["get", "textSize"], 12],
         "text-font": ["Noto Sans Regular"],
-        "text-offset": [0, 0.6],
-        "text-anchor": "top",
+        "text-offset": [
+          "case",
+          ["==", ["get", "textAnchor"], "center"],
+          ["literal", [0, 0]],
+          ["literal", [0, 0.6]],
+        ],
+        "text-anchor": ["coalesce", ["get", "textAnchor"], "top"],
       },
       paint: {
-        "text-color": "#111",
+        "text-color": ["coalesce", ["get", "textColor"], "#111"],
         "text-halo-color": "#fff",
         "text-halo-width": 1.2,
       },
     });
+  }
+  if (map.getLayer("graphics-label")) {
+    map.setLayoutProperty("graphics-label", "text-size", ["coalesce", ["get", "textSize"], 12]);
+    map.setLayoutProperty("graphics-label", "text-anchor", ["coalesce", ["get", "textAnchor"], "top"]);
+    map.setLayoutProperty("graphics-label", "text-offset", [
+      "case",
+      ["==", ["get", "textAnchor"], "center"],
+      ["literal", [0, 0]],
+      ["literal", [0, 0.6]],
+    ]);
+    map.setPaintProperty("graphics-label", "text-color", ["coalesce", ["get", "textColor"], "#111"]);
   }
   if (!map.getLayer("measures-fill")) {
     map.addLayer({
@@ -555,7 +593,8 @@ function draw(
     const selected = state.selectedId === graphic.id ? 1 : 0;
     const color = strokeOf(graphic);
     const dashed = graphic.status === "A" ? 1 : 0;
-    const label = [graphic.modifiers.uniqueDesignation, graphic.name].filter(Boolean).join(" · ");
+    const bean = graphic.kind === "bean";
+    const label = bean ? "" : [graphic.modifiers.uniqueDesignation, graphic.name].filter(Boolean).join(" · ");
 
     if (graphic.kind === "point" || graphic.kind === "pin" || graphic.kind === "text") {
       live.add(graphic.id);
@@ -567,11 +606,47 @@ function draw(
 
     if (isLine(graphic) && outlineOf(graphic).length >= 2) {
       const ring = outlineOf(graphic);
-      if (isArea(graphic) && ring.length >= 4) {
+      if (bean) {
+        const shown = shownCoordinates(graphic);
+        const width = state.options.strokeWidth || 2;
+        features.push({
+          type: "Feature",
+          properties: { id: graphic.id, color: "#000000", selected: 0, dashed, label: "", lineWidth: width + 3.5 },
+          geometry: { type: "LineString", coordinates: ring },
+        });
+        features.push({
+          type: "Feature",
+          properties: { id: graphic.id, color, selected: 0, dashed, label: "", lineWidth: width + 1 },
+          geometry: { type: "LineString", coordinates: ring },
+        });
+        const mark = beanModifier(graphic.echelon);
+        if (mark && shown.length >= 2) {
+          features.push({
+            type: "Feature",
+            properties: { id: graphic.id, color, selected: 0, dashed: 0, label: mark, textColor: color, textSize: 16, textAnchor: "center" },
+            geometry: { type: "Point", coordinates: beanBack(shown[0], shown[1]) },
+          });
+        }
+        const caption = [graphic.modifiers.uniqueDesignation, graphic.modifiers.higherFormation, graphic.modifiers.additionalInformation]
+          .filter(Boolean)
+          .join(" · ");
+        if (caption && shown.length >= 2) {
+          features.push({
+            type: "Feature",
+            properties: { id: graphic.id, color, selected: 0, dashed: 0, label: caption, textColor: color, textSize: 13, textAnchor: "center" },
+            geometry: { type: "Point", coordinates: shown[0] },
+          });
+        }
+      } else if (isArea(graphic) && ring.length >= 4) {
         features.push({
           type: "Feature",
           properties: { id: graphic.id, color, selected, dashed, label: "" },
           geometry: { type: "Polygon", coordinates: [ring] },
+        });
+        features.push({
+          type: "Feature",
+          properties: { id: graphic.id, color, selected, dashed, label },
+          geometry: { type: "Point", coordinates: labelPoint(ring) },
         });
       } else {
         features.push({
@@ -579,12 +654,12 @@ function draw(
           properties: { id: graphic.id, color, selected, dashed, label: "" },
           geometry: { type: "LineString", coordinates: ring },
         });
+        features.push({
+          type: "Feature",
+          properties: { id: graphic.id, color, selected, dashed, label },
+          geometry: { type: "Point", coordinates: labelPoint(ring) },
+        });
       }
-      features.push({
-        type: "Feature",
-        properties: { id: graphic.id, color, selected, dashed, label },
-        geometry: { type: "Point", coordinates: labelPoint(ring) },
-      });
     }
   }
 
@@ -598,7 +673,8 @@ function draw(
   setData(map, "graphics", { type: "FeatureCollection", features });
   const vectors = placementVectors(map, state);
   setData(map, "measures", { type: "FeatureCollection", features: vectors.measures });
-  setData(map, "draft", lineCollection(vectors.draft, "#e65100"));
+  if (map.getLayer("draft-line")) map.setPaintProperty("draft-line", "line-color", draftStroke(state));
+  setData(map, "draft", lineCollection(vectors.draft, draftStroke(state)));
   setData(map, "measure", lineCollection(state.measurePts, "#111"));
   syncAnchors(map, state, anchors, stateRef, dispatch);
   setData(map, "grid", state.options.grid ? graticule(map) : { type: "FeatureCollection", features: [] });
@@ -655,7 +731,11 @@ function rubberPoints(state: ReturnType<typeof useMapStore>["state"]): [number, 
   if (!cursor) return points;
   const last = points[points.length - 1];
   if (last && last[0] === cursor[0] && last[1] === cursor[1]) return points;
-  return [...points, cursor];
+  const next = [...points, cursor];
+  if (state.placing?.mode === "generic" && state.placing.kind === "bean" && next.length >= 2) {
+    return beanPolygon(next[0], next[next.length - 1]);
+  }
+  return next;
 }
 
 function previewGraphic(state: ReturnType<typeof useMapStore>["state"]): Graphic | null {
@@ -781,7 +861,7 @@ function placeHandle(
         });
         return;
       }
-      const [originX, originY] = centroid(origin);
+      const [originX, originY] = graphic.kind === "bean" ? origin[0] : centroid(origin);
       if (kind === "rotate") {
         const startBearing = bearingFromNorth([originX, originY], [startLng, startLat]);
         const bearing = bearingFromNorth([originX, originY], [lngLat.lng, lngLat.lat]);
@@ -809,7 +889,7 @@ function placeHandle(
         });
         return;
       }
-      const [originX, originY] = centroid(origin);
+      const [originX, originY] = graphic.kind === "bean" ? origin[0] : centroid(origin);
       if (kind === "rotate") {
         const startBearing = bearingFromNorth([originX, originY], [startLng, startLat]);
         const bearing = bearingFromNorth([originX, originY], [lngLat.lng, lngLat.lat]);
@@ -844,16 +924,30 @@ function syncAnchors(
 ) {
   const graphic = state.graphics.find((item) => item.id === state.selectedId);
   const layer = graphic ? state.layers.find((item) => item.id === graphic.layerId) : undefined;
+  const bean = graphic?.kind === "bean";
   const editable = Boolean(
     graphic &&
       !layer?.locked &&
       layer?.visible !== false &&
-      graphic.renderer === "symbol" &&
-      (graphic.kind === "line" || graphic.kind === "area") &&
-      graphic.coordinates.length > 0,
+      graphic.coordinates.length > 0 &&
+      (bean || (graphic.renderer === "symbol" && (graphic.kind === "line" || graphic.kind === "area"))),
   );
   const wanted = new Set<string>();
-  if (editable && graphic) {
+  if (editable && graphic && bean) {
+    const shown = shownCoordinates(graphic);
+    const ring = shown.length >= 2 ? beanPolygon(shown[0], shown[1]) : [];
+    let east = -Infinity;
+    let north = -Infinity;
+    for (const [lng, lat] of ring) {
+      if (lng > east) east = lng;
+      if (lat > north) north = lat;
+    }
+    placeHandle(map, anchors, wanted, stateRef, dispatch, graphic, "move", shown[0] ?? centroid(shown));
+    if (Number.isFinite(east) && Number.isFinite(north)) {
+      placeHandle(map, anchors, wanted, stateRef, dispatch, graphic, "scale", [east, north]);
+    }
+    placeHandle(map, anchors, wanted, stateRef, dispatch, graphic, "rotate", rotationHandlePosition(graphic));
+  } else if (editable && graphic) {
     const shown = shownCoordinates(graphic);
     shown.forEach((coord, index) => {
       const key = `${graphic.id}:${index}`;

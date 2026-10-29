@@ -5,7 +5,7 @@ import type { Map } from "maplibre-gl";
 import { getCatalog, groupCatalog } from "@/lib/catalog";
 import { formatDistance, formatLatLng, parseCoordinate, pathLength, ringArea } from "@/lib/geo";
 import { useMapStore } from "@/lib/store";
-import { affiliationColor, canScaleGraphic, FIELD, graphicRotation, graphicScale, renderMeasurePreview, renderSymbol, shownCoordinates, symbolAllows, TEXT_MODIFIERS, toBasePoint } from "@/lib/symbols";
+import { affiliationColor, canScaleGraphic, FIELD, frameColor, graphicRotation, graphicScale, renderMeasurePreview, renderSymbol, shownCoordinates, symbolAllows, TEXT_MODIFIERS, toBasePoint } from "@/lib/symbols";
 import {
   AFFILIATIONS,
   ECHELONS,
@@ -241,6 +241,7 @@ export function GalleryPanel() {
             ["text", "Text"],
             ["rect", "Rectangle"],
             ["circle", "Circle"],
+            ["bean", "Bean"],
           ] as const
         ).map(([kind, name]) => (
           <button
@@ -471,7 +472,7 @@ export function EditorPanel() {
               <small>{graphic.renderer === "symbol" ? "MIL-STD-2525" : "Generic graphic"}</small>
             </div>
           </div>
-          {graphic.renderer === "symbol" && (
+          {(graphic.renderer === "symbol" || graphic.kind === "bean") && (
             <>
               <div className="affil-row">
                 {AFFILIATIONS.map((item) => (
@@ -480,7 +481,16 @@ export function EditorPanel() {
                     type="button"
                     className={graphic.affiliation === item.code ? "on" : ""}
                     style={{ borderColor: affiliationColor(item.code) }}
-                    onClick={() => dispatch({ type: "patch", id: graphic.id, patch: { affiliation: item.code } })}
+                    onClick={() =>
+                      dispatch({
+                        type: "patch",
+                        id: graphic.id,
+                        patch:
+                          graphic.kind === "bean"
+                            ? { affiliation: item.code, color: frameColor(item.code) }
+                            : { affiliation: item.code },
+                      })
+                    }
                   >
                     {item.label}
                   </button>
@@ -498,7 +508,7 @@ export function EditorPanel() {
                   <option value="A">Anticipated</option>
                 </select>
               </label>
-              {symbolAllows(graphic, state.options.standard, FIELD.echelon) && (
+              {(graphic.kind === "bean" || symbolAllows(graphic, state.options.standard, FIELD.echelon)) && (
                 <label className="opt-row">
                   Unit size
                   <select
@@ -546,7 +556,7 @@ export function EditorPanel() {
               )}
             </>
           )}
-          {graphic.renderer === "generic" && (
+          {graphic.renderer === "generic" && graphic.kind !== "bean" && (
             <label className="opt-row">
               Color
               <input
@@ -573,7 +583,10 @@ export function EditorPanel() {
 
 function ModifierFields({ graphic }: { graphic: Graphic }) {
   const { state, dispatch } = useMapStore();
-  const fields = TEXT_MODIFIERS.filter((field) => symbolAllows(graphic, state.options.standard, field.modifier));
+  const fields =
+    graphic.kind === "bean"
+      ? TEXT_MODIFIERS.filter((field) => field.key === "uniqueDesignation" || field.key === "higherFormation" || field.key === "additionalInformation")
+      : TEXT_MODIFIERS.filter((field) => symbolAllows(graphic, state.options.standard, field.modifier));
   return (
     <>
       {fields.map((field) => (

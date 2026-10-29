@@ -262,6 +262,7 @@ function placementHint(
   if (kind === "point" || kind === "pin" || kind === "text") return `Click the map to place ${side}${name}. Esc cancels.`;
   if (kind === "rect") return "Click one corner, then the opposite corner.";
   if (kind === "circle") return "Click the center, then a point on the edge.";
+  if (kind === "bean") return "Click the center, then the far end. Friend is blue, enemy is red. Unit size sets platoon or company.";
   if (kind === "area") return `Click to add vertices of ${name}. Double-click or Enter to close the area.`;
   return `Click to add vertices of ${name}. Double-click or Enter to finish the line.`;
 }

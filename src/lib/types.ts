@@ -1,6 +1,6 @@
 export type Affiliation = "F" | "H" | "N" | "U";
 export type Presence = "P" | "A";
-export type DrawKind = "point" | "line" | "area" | "pin" | "text" | "rect" | "circle";
+export type DrawKind = "point" | "line" | "area" | "pin" | "text" | "rect" | "circle" | "bean";
 export type SectionId =
   | "favorites"
   | "formations"
@@ -100,7 +100,7 @@ export type ViewOptions = {
 
 export type Placing =
   | { mode: "symbol"; symbol: CatalogSymbol }
-  | { mode: "generic"; kind: "pin" | "text" | "line" | "area" | "rect" | "circle"; name: string };
+  | { mode: "generic"; kind: "pin" | "text" | "line" | "area" | "rect" | "circle" | "bean"; name: string };
 
 export type LeftPanel = "layers" | "active" | "print" | "options" | null;
 export type RightPanel = "gallery" | "editor" | "points" | null;
