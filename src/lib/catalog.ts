@@ -16,6 +16,10 @@ const FORMATIONS = new Set([
   SymbolID.SymbolSet_CyberSpace,
 ]);
 
+export function sectionOfBasicId(basicId: string): Section {
+  return sectionFor(Number((basicId || "").slice(0, 2)) || 0);
+}
+
 function sectionFor(symbolSet: number): Section {
   if (
     symbolSet === SymbolID.SymbolSet_LandEquipment ||

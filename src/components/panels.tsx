@@ -1,11 +1,11 @@
 "use client";
 
-import { useEffect, useMemo, useState, type MutableRefObject } from "react";
+import { useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
 import type { Map } from "maplibre-gl";
 import { getCatalog, groupCatalog } from "@/lib/catalog";
 import { formatDistance, formatLatLng, parseCoordinate, pathLength, ringArea } from "@/lib/geo";
 import { useMapStore } from "@/lib/store";
-import { affiliationColor, FIELD, renderMeasurePreview, renderSymbol, symbolAllows, TEXT_MODIFIERS } from "@/lib/symbols";
+import { affiliationColor, canScaleGraphic, FIELD, graphicRotation, graphicScale, renderMeasurePreview, renderSymbol, shownCoordinates, symbolAllows, TEXT_MODIFIERS, toBasePoint } from "@/lib/symbols";
 import {
   AFFILIATIONS,
   ECHELONS,
@@ -344,6 +344,107 @@ function SymbolGrid({
   );
 }
 
+export function SymbolAdjust({ graphic, floating = false }: { graphic?: Graphic; floating?: boolean }) {
+  if (!graphic || !canScaleGraphic(graphic)) return null;
+  return (
+    <div className={floating ? "scale-tool" : undefined}>
+      <ScaleSlider graphic={graphic} />
+      <RotationSlider graphic={graphic} />
+    </div>
+  );
+}
+
+function ScaleSlider({ graphic }: { graphic: Graphic }) {
+  const { dispatch } = useMapStore();
+  const from = useRef(1);
+  const scale = graphicScale(graphic);
+  return (
+    <label className="opt-row">
+      Scale
+      <input
+        type="range"
+        min={0.25}
+        max={4}
+        step={0.05}
+        value={scale}
+        aria-label="Symbol scale"
+        onPointerDown={() => {
+          from.current = graphicScale(graphic);
+        }}
+        onChange={(event) => dispatch({ type: "scale", id: graphic.id, scale: Number(event.target.value), history: false })}
+        onPointerUp={(event) =>
+          dispatch({ type: "scale", id: graphic.id, scale: Number(event.currentTarget.value), from: from.current })
+        }
+      />
+      <span>{Math.round(scale * 100)}%</span>
+    </label>
+  );
+}
+
+function RotationSlider({ graphic }: { graphic: Graphic }) {
+  const { dispatch } = useMapStore();
+  const from = useRef(0);
+  const rotation = graphicRotation(graphic);
+  return (
+    <label className="opt-row">
+      Rotate
+      <input
+        type="range"
+        min={-180}
+        max={180}
+        step={1}
+        value={rotation}
+        aria-label="Symbol rotation"
+        onPointerDown={() => {
+          from.current = graphicRotation(graphic);
+        }}
+        onChange={(event) => dispatch({ type: "rotate", id: graphic.id, rotation: Number(event.target.value), history: false })}
+        onPointerUp={(event) =>
+          dispatch({ type: "rotate", id: graphic.id, rotation: Number(event.currentTarget.value), from: from.current })
+        }
+      />
+      <span>{Math.round(rotation)}°</span>
+    </label>
+  );
+}
+
+export function SymbolMenu() {
+  const { state, dispatch } = useMapStore();
+  const menu = state.menu;
+  useEffect(() => {
+    if (!menu) return;
+    const close = (event: PointerEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target?.closest(".symbol-menu")) return;
+      dispatch({ type: "menu", menu: null });
+    };
+    window.addEventListener("pointerdown", close);
+    return () => window.removeEventListener("pointerdown", close);
+  }, [dispatch, menu]);
+  if (!menu) return null;
+  const graphic = menu.id ? state.graphics.find((item) => item.id === menu.id) : undefined;
+  const locked = Boolean(graphic && state.layers.find((item) => item.id === graphic.layerId)?.locked);
+  const activeLocked = Boolean(state.layers.find((item) => item.id === state.activeLayerId)?.locked);
+  return (
+    <div className="symbol-menu" style={{ left: menu.x, top: menu.y }} role="menu">
+      <button type="button" role="menuitem" disabled={!graphic || locked} onClick={() => graphic && dispatch({ type: "copy", id: graphic.id })}>
+        Copy
+      </button>
+      <button
+        type="button"
+        role="menuitem"
+        disabled={!state.clipboard || activeLocked}
+        onClick={() => dispatch({ type: "paste", lng: menu.lng, lat: menu.lat })}
+      >
+        Paste
+      </button>
+      <button type="button" role="menuitem" disabled={!graphic || locked} onClick={() => graphic && dispatch({ type: "remove", id: graphic.id })}>
+        Delete
+      </button>
+    </div>
+  );
+}
+
 export function EditorPanel() {
   const { state, dispatch } = useMapStore();
   const graphic = state.graphics.find((item) => item.id === state.selectedId);
@@ -432,6 +533,7 @@ export function EditorPanel() {
                   Task force
                 </label>
               )}
+              <SymbolAdjust graphic={graphic} />
               {symbolAllows(graphic, state.options.standard, FIELD.feint) && (
                 <label className="check-row">
                   <input
@@ -518,7 +620,7 @@ export function PointListPanel() {
         <p className="empty">Select a graphic to edit its coordinates.</p>
       ) : (
         <div className="panel-scroll">
-          {graphic.coordinates.map((coord, index) => (
+          {shownCoordinates(graphic).map((coord, index) => (
             <label key={`${graphic.id}-${index}`} className="stack-field">
               Point {index + 1}
               <input
@@ -527,7 +629,10 @@ export function PointListPanel() {
                 onBlur={(event) => {
                   const parsed = parseCoordinate(event.target.value);
                   if (!parsed) return;
-                  const coordinates = graphic.coordinates.map((item, i) => (i === index ? parsed : item)) as [
+                  const scale = canScaleGraphic(graphic) ? graphicScale(graphic) : 1;
+                  const rotation = canScaleGraphic(graphic) ? graphicRotation(graphic) : 0;
+                  const base = toBasePoint(graphic.coordinates, scale, rotation, parsed);
+                  const coordinates = graphic.coordinates.map((item, i) => (i === index ? base : item)) as [
                     number,
                     number,
                   ][];

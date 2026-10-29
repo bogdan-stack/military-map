@@ -1,10 +1,13 @@
 "use client";
 
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Map } from "maplibre-gl";
 import { formatBearing, formatLatLng, parseCoordinate, bearingDeg } from "@/lib/geo";
+import { symbolContract } from "@/lib/symbols";
 import { MapStoreProvider, useMapStore } from "@/lib/store";
+import type { GroundCondition, MovementClass } from "@/lib/mcoo/classify";
 import { MapCanvas } from "./MapCanvas";
+import { McooPanel } from "./McooPanel";
 import {
   ActiveLayerPanel,
   EditorPanel,
@@ -15,6 +18,8 @@ import {
   OptionsPanel,
   PointListPanel,
   PrintPanel,
+  SymbolAdjust,
+  SymbolMenu,
 } from "./panels";
 
 export function MapApp() {
@@ -31,6 +36,13 @@ function Shell() {
   const [pitched, setPitched] = useState(false);
   const [search, setSearch] = useState("");
   const [searchError, setSearchError] = useState("");
+  const [mcooOn, setMcooOn] = useState(false);
+  const [mcooMovement, setMcooMovement] = useState<MovementClass>("tracked");
+  const [mcooGround, setMcooGround] = useState<GroundCondition>("dry");
+  const mcoo = useMemo(
+    () => (mcooOn ? { movement: mcooMovement, ground: mcooGround } : null),
+    [mcooOn, mcooMovement, mcooGround],
+  );
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -43,6 +55,7 @@ function Shell() {
         event.preventDefault();
         dispatch({ type: "redo" });
       } else if (event.key === "Escape") {
+        if (state.menu) dispatch({ type: "menu", menu: null });
         dispatch({ type: "cancel-place" });
         dispatch({ type: "clear-measure" });
       } else if (event.key === "Enter" && !typing) {
@@ -56,18 +69,20 @@ function Shell() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [dispatch, state.selectedId]);
+  }, [dispatch, state.menu, state.selectedId]);
 
   const hint = placementHint(
     state.placing,
     state.options.measure,
     state.layers.find((l) => l.id === state.activeLayerId)?.locked,
     state.galleryAffiliation,
+    state.draft.length,
+    state.options.standard,
   );
 
   return (
     <div className={`app${state.options.theme === "dark" ? " dark" : ""}`}>
-      <MapCanvas mapRef={mapRef} />
+      <MapCanvas mapRef={mapRef} mcoo={mcoo} />
       <div className="rail rail-left">
         <Tool title="Layers" active={state.left === "layers"} onClick={() => dispatch({ type: "toggle-left", panel: "layers" })}>
           <LayersIcon />
@@ -80,6 +95,9 @@ function Shell() {
         </Tool>
         <Tool title="Options" active={state.left === "options"} onClick={() => dispatch({ type: "toggle-left", panel: "options" })}>
           <SlidersIcon />
+        </Tool>
+        <Tool className="mcoo-tool" title="Combined obstacle overlay" active={mcooOn} onClick={() => setMcooOn((on) => !on)}>
+          MCOO
         </Tool>
       </div>
       <div className="rail rail-right">
@@ -156,12 +174,25 @@ function Shell() {
       {state.left === "active" && <ActiveLayerPanel />}
       {state.left === "print" && <PrintPanel mapRef={mapRef} />}
       {state.left === "options" && <OptionsPanel />}
+      {mcooOn && (
+        <McooPanel
+          movement={mcooMovement}
+          ground={mcooGround}
+          onMovement={setMcooMovement}
+          onGround={setMcooGround}
+          onClose={() => setMcooOn(false)}
+        />
+      )}
       {state.right === "gallery" && <GalleryPanel />}
       {state.right === "editor" && <EditorPanel />}
       {state.right === "points" && <PointListPanel />}
       {state.infoOpen && <MessageCenter />}
 
       {state.options.hints && hint && <div className="hint">{hint}</div>}
+      {state.selectedId && (
+        <SymbolAdjust graphic={state.graphics.find((item) => item.id === state.selectedId)} floating />
+      )}
+      <SymbolMenu />
       {state.options.coordinateSearch && (
         <form
           className="coord-search"
@@ -204,6 +235,8 @@ function placementHint(
   measure: boolean,
   locked?: boolean,
   affiliation?: ReturnType<typeof useMapStore>["state"]["galleryAffiliation"],
+  draftLength = 0,
+  standard: ReturnType<typeof useMapStore>["state"]["options"]["standard"] = "2525",
 ) {
   if (measure) return "Measure: click the map to add points. Esc clears the measurement.";
   if (!placing) return null;
@@ -211,6 +244,21 @@ function placementHint(
   const kind = placing.mode === "symbol" ? placing.symbol.kind : placing.kind;
   const name = placing.mode === "symbol" ? placing.symbol.name : placing.name;
   const side = placing.mode === "symbol" ? (affiliation === "H" ? "enemy " : affiliation === "N" ? "neutral " : affiliation === "U" ? "unknown " : "") : "";
+  if (placing.mode === "symbol") {
+    const contract = symbolContract(placing.symbol.basicId, standard);
+    const title = `${side}${name}`;
+    if (contract.mode === "point") return `Click the map to place ${title}. Esc cancels.`;
+    if (contract.mode === "fixed") {
+      const total = contract.maxPoints ?? contract.minPoints;
+      const step = Math.min(draftLength + 1, total);
+      return `${title}. Point ${step} of ${total}.`;
+    }
+    if (draftLength < contract.minPoints) {
+      const left = contract.minPoints - draftLength;
+      return `${title}. At least ${contract.minPoints} points. ${left} more needed.`;
+    }
+    return `${title}. At least ${contract.minPoints} points. Double-click or Enter to finish.`;
+  }
   if (kind === "point" || kind === "pin" || kind === "text") return `Click the map to place ${side}${name}. Esc cancels.`;
   if (kind === "rect") return "Click one corner, then the opposite corner.";
   if (kind === "circle") return "Click the center, then a point on the edge.";
@@ -227,17 +275,19 @@ function Tool({
   title,
   active,
   disabled,
+  className,
   onClick,
   children,
 }: {
   title: string;
   active?: boolean;
   disabled?: boolean;
+  className?: string;
   onClick: () => void;
   children: ReactNode;
 }) {
   return (
-    <button type="button" className={`tool${active ? " active" : ""}`} title={title} disabled={disabled} onClick={onClick}>
+    <button type="button" className={`tool${active ? " active" : ""}${className ? ` ${className}` : ""}`} title={title} disabled={disabled} onClick={onClick}>
       {children}
     </button>
   );

@@ -130,15 +130,16 @@ a { color: #0b57d0; }
   position: relative;
   height: 78px;
   border: 1px solid #222;
-  background: var(--cyan);
+  background: #fff;
   display: grid;
   place-items: center;
   overflow: hidden;
   padding: 2px;
 }
-.symbol-cell.side-h { background: #ffc9c9; }
-.symbol-cell.side-n { background: #d9f5d9; }
-.symbol-cell.side-u { background: #fff3b0; }
+.symbol-cell.side-f { box-shadow: inset 0 0 0 2px #80e0ff; }
+.symbol-cell.side-h { box-shadow: inset 0 0 0 2px #ff8080; }
+.symbol-cell.side-n { box-shadow: inset 0 0 0 2px #a5d6a7; }
+.symbol-cell.side-u { box-shadow: inset 0 0 0 2px #ffe082; }
 .symbol-cell.on { outline: 2px solid #c62828; outline-offset: 1px; }
 .symbol-cell:hover { filter: brightness(1.05); }
 .thumb-svg { display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; }
@@ -174,9 +175,16 @@ a { color: #0b57d0; }
 .layer-name { flex: 1; text-align: left; border: 0; background: transparent; font-weight: 650; }
 .layer-row input { width: 120px; }
 .layer-row button, .graphic-row { border: 0; background: transparent; }
-.graphic-row { width: 100%; text-align: left; border-bottom: 1px solid #f0f0f0; }
+.graphic-row { width: 100%; justify-content: flex-start; text-align: left; border-bottom: 1px solid #f0f0f0; }
 .graphic-row.on { background: #e7f5fd; }
-.graphic-row span { display: flex; flex-direction: column; }
+.graphic-row .thumb-svg,
+.graphic-row .thumb-fallback {
+  width: 40px;
+  height: 40px;
+  flex: none;
+  overflow: hidden;
+}
+.graphic-row span { display: flex; flex-direction: column; min-width: 0; }
 .graphic-row small { color: #777; }
 .import-row { display: flex; flex-direction: column; gap: 4px; margin-top: 12px; font-size: 12px; }
 
@@ -195,6 +203,77 @@ a { color: #0b57d0; }
 .coord-readout { left: 8px; bottom: 28px; }
 .measure-chip { left: 50%; bottom: 18px; transform: translateX(-50%); display: flex; gap: 8px; align-items: center; }
 
+.anchor-handle {
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  border: 2px solid #e65100;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 0 0 1px #fff;
+  cursor: grab;
+}
+.anchor-handle:active { cursor: grabbing; }
+.move-handle, .scale-handle {
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 2px solid #1f4bff;
+  background: #fff;
+  box-shadow: 0 0 0 1px #fff;
+}
+.move-handle { border-radius: 3px; cursor: move; background: #1f4bff; }
+.scale-handle { border-radius: 2px; cursor: nwse-resize; }
+.rotate-handle {
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 2px solid #6a1b9a;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 0 0 1px #fff;
+  cursor: grab;
+}
+.move-handle:active, .scale-handle:active, .rotate-handle:active { cursor: grabbing; }
+.scale-tool {
+  position: absolute;
+  z-index: 5;
+  left: 50%;
+  bottom: 18px;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  background: #fff;
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow);
+  padding: 6px 10px;
+  font-size: 13px;
+}
+.scale-tool .opt-row { gap: 8px; padding: 0; }
+.scale-tool input[type="range"] { width: 110px; }
+.symbol-menu {
+  position: fixed;
+  z-index: 40;
+  min-width: 148px;
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+  border: 1px solid #222;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  padding: 4px;
+}
+.symbol-menu button {
+  text-align: left;
+  background: transparent;
+  border: 0;
+  padding: 7px 10px;
+  cursor: pointer;
+  font: inherit;
+}
+.symbol-menu button:disabled { opacity: 0.4; cursor: default; }
+.symbol-menu button:not(:disabled):hover { background: #eef6ff; }
+.symbol-menu button:last-child:not(:disabled) { color: #a32020; }
 .symbol-marker { cursor: grab; }
 .symbol-marker.selected { filter: drop-shadow(0 0 1px #e65100) drop-shadow(0 0 2px #ff9800); }
 .symbol-marker svg { display: block; width: 100%; height: 100%; overflow: visible; }
@@ -209,13 +288,46 @@ a { color: #0b57d0; }
 }
 .map-text { font-size: 15px; }
 
+.panel-mcoo { left: 48px; bottom: 12px; width: 320px; max-height: min(420px, calc(100% - 16px)); }
+.mcoo-note { margin: 0; font-size: 12px; line-height: 1.4; color: #333; }
+.mcoo-field { display: flex; flex-direction: column; gap: 3px; margin-top: 10px; font-size: 12px; }
+.mcoo-legend { display: grid; gap: 6px; margin-top: 12px; }
+.mcoo-legend div { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.mcoo-swatch { width: 34px; height: 16px; border: 1px solid #b5b5b5; flex: none; background: #fff; }
+.mcoo-swatch.restricted {
+  background: repeating-linear-gradient(135deg, transparent 0 4px, #1a8c3c 4px 7px, transparent 7px 12px);
+  box-shadow: inset 0 0 0 2px #106026;
+}
+.mcoo-swatch.severe {
+  background-color: rgba(26, 140, 60, 0.13);
+  background-image:
+    repeating-linear-gradient(135deg, transparent 0 4px, #1a8c3c 4px 7px, transparent 7px 12px),
+    repeating-linear-gradient(45deg, transparent 0 4px, #1a8c3c 4px 7px, transparent 7px 12px);
+  box-shadow: inset 0 0 0 2px #106026;
+}
+.mcoo-swatch.built {
+  background:
+    repeating-linear-gradient(135deg, transparent 0 4px, #141414 4px 7px, transparent 7px 12px),
+    repeating-linear-gradient(45deg, transparent 0 4px, #141414 4px 7px, transparent 7px 12px);
+  box-shadow: inset 0 0 0 2px #141414;
+}
+.mcoo-swatch.water {
+  background-color: rgba(30, 110, 210, 0.16);
+  background-image:
+    repeating-linear-gradient(135deg, transparent 0 4px, #1e6ed2 4px 7px, transparent 7px 12px),
+    repeating-linear-gradient(45deg, transparent 0 4px, #1e6ed2 4px 7px, transparent 7px 12px);
+  box-shadow: inset 0 0 0 2px #124a96;
+}
+.rail-left .tool.mcoo-tool { width: auto; min-width: 38px; padding: 0 4px; font-size: 9px; font-weight: 700; letter-spacing: 0.02em; }
+
 .app.dark { --ink: #eee; --panel: #2a2a2a; --line: #555; color: #eee; }
-.app.dark .tool, .app.dark .panel, .app.dark .hint, .app.dark .coord-search, .app.dark .coord-readout, .app.dark .measure-chip,
+.app.dark .tool, .app.dark .panel, .app.dark .hint, .app.dark .coord-search, .app.dark .coord-readout, .app.dark .measure-chip, .app.dark .scale-tool, .app.dark .symbol-menu,
 .app.dark .panel-head, .app.dark .gallery-switch, .app.dark input, .app.dark select, .app.dark .generic-row button, .app.dark .button-row button {
   background: #2a2a2a;
   color: #eee;
   border-color: #555;
 }
+.app.dark .mcoo-note { color: #ddd; }
 .app.dark .section-row button small { color: #ccc; }
 .app.dark .gallery-switch button.on, .app.dark .tool.active { background: #1d4e66; }
 

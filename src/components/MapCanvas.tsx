@@ -6,8 +6,9 @@ import type { FeatureCollection } from "geojson";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { circlePolygon, rectPolygon } from "@/lib/geo";
 import { useMapStore } from "@/lib/store";
-import { affiliationColor, renderControlMeasure, renderSymbol, type MapFrame } from "@/lib/symbols";
+import { affiliationColor, bearingFromNorth, canScaleGraphic, centroid, defaultModifiers, frameColor, graphicRotation, graphicScale, placingIsMulti, renderControlMeasure, renderSymbol, rotationHandlePosition, shownCoordinates, symbolContract, toBasePoint, type MapFrame } from "@/lib/symbols";
 import type { Graphic } from "@/lib/types";
+import { syncMcooHatch, type McooHatchView } from "@/lib/mcoo/layer";
 
 const STYLES: Record<string, string | maplibregl.StyleSpecification> = {
   terrain: "https://tiles.openfreemap.org/styles/liberty",
@@ -66,15 +67,18 @@ function labelPoint(coords: [number, number][]): [number, number] {
 }
 
 function strokeOf(graphic: Graphic) {
-  return graphic.renderer === "generic" ? graphic.color : affiliationColor(graphic.affiliation);
+  return graphic.renderer === "generic" ? graphic.color : frameColor(graphic.affiliation);
 }
 
-export function MapCanvas({ mapRef }: { mapRef: MutableRefObject<Map | null> }) {
+export function MapCanvas({ mapRef, mcoo }: { mapRef: MutableRefObject<Map | null>; mcoo: McooHatchView }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const markers = useRef(new globalThis.Map<string, maplibregl.Marker>());
+  const anchors = useRef(new globalThis.Map<string, maplibregl.Marker>());
   const { state, dispatch } = useMapStore();
   const stateRef = useRef(state);
   stateRef.current = state;
+  const mcooRef = useRef(mcoo);
+  mcooRef.current = mcoo;
   const styleKey = state.options.mapType;
   const styled = useRef(false);
 
@@ -93,49 +97,127 @@ export function MapCanvas({ mapRef }: { mapRef: MutableRefObject<Map | null> }) 
     map.on("load", () => {
       tint(map);
       ensureLayers(map);
+      syncMcooHatch(map, mcooRef.current);
       map.resize();
     });
     map.on("style.load", () => {
       tint(map);
       ensureLayers(map);
-      draw(map, stateRef.current, markers.current, dispatch);
+      syncMcooHatch(map, mcooRef.current);
+      draw(map, stateRef.current, markers.current, anchors.current, stateRef, dispatch);
     });
+    let suppressClick = false;
     map.on("click", (event) => {
+      if (suppressClick) {
+        suppressClick = false;
+        return;
+      }
       const current = stateRef.current;
-      const hits = map.queryRenderedFeatures(event.point, {
-        layers: ["graphics-fill", "graphics-line", "graphics-dashed", "measures-fill", "measures-line", "measures-dashed", "measures-label"].filter((id) => map.getLayer(id)),
-      });
-      if (hits.length && !current.placing && !current.options.measure) {
-        const id = hits[0].properties?.id;
-        if (typeof id === "string") {
-          dispatch({ type: "select", id });
-          return;
-        }
+      const id = featureId(map, event.point);
+      if (id && !current.placing && !current.options.measure) {
+        dispatch({ type: "select", id });
+        return;
+      }
+      if (event.originalEvent.detail > 1 && current.placing?.mode === "symbol") {
+        const contract = symbolContract(current.placing.symbol.basicId, current.options.standard);
+        if (contract.mode !== "point") return;
       }
       dispatch({ type: "map-click", lng: event.lngLat.lng, lat: event.lngLat.lat });
     });
+    map.on("contextmenu", (event) => {
+      event.preventDefault();
+      const current = stateRef.current;
+      if (current.placing || current.options.measure) return;
+      dispatch({
+        type: "menu",
+        menu: {
+          x: event.originalEvent.clientX,
+          y: event.originalEvent.clientY,
+          lng: event.lngLat.lng,
+          lat: event.lngLat.lat,
+          id: featureId(map, event.point),
+        },
+      });
+    });
+    map.on("mousedown", (event) => {
+      if (event.originalEvent.button !== 0) return;
+      const current = stateRef.current;
+      if (current.placing || current.options.measure) return;
+      const target = event.originalEvent.target as HTMLElement | null;
+      if (target?.closest(".anchor-handle, .move-handle, .scale-handle, .rotate-handle, .maplibregl-marker")) return;
+      const id = featureId(map, event.point);
+      if (!id) return;
+      const graphic = current.graphics.find((item) => item.id === id);
+      const layer = graphic ? current.layers.find((item) => item.id === graphic.layerId) : undefined;
+      if (!graphic || layer?.locked || layer?.visible === false) return;
+      if (graphic.kind === "point" || graphic.kind === "pin" || graphic.kind === "text") return;
+      const origin = event.point;
+      const startLng = event.lngLat.lng;
+      const startLat = event.lngLat.lat;
+      const from = graphic.coordinates.map((point) => [point[0], point[1]] as [number, number]);
+      let moved = false;
+      map.dragPan.disable();
+      const onMove = (ev: maplibregl.MapMouseEvent) => {
+        if (Math.hypot(ev.point.x - origin.x, ev.point.y - origin.y) < 4) return;
+        moved = true;
+        const dx = ev.lngLat.lng - startLng;
+        const dy = ev.lngLat.lat - startLat;
+        dispatch({
+          type: "move",
+          id: graphic.id,
+          history: false,
+          coordinates: from.map(([lng, lat]) => [lng + dx, lat + dy]),
+        });
+      };
+      const onUp = (ev: maplibregl.MapMouseEvent) => {
+        map.off("mousemove", onMove);
+        map.off("mouseup", onUp);
+        map.dragPan.enable();
+        if (!moved) return;
+        suppressClick = true;
+        const dx = ev.lngLat.lng - startLng;
+        const dy = ev.lngLat.lat - startLat;
+        dispatch({
+          type: "commit-move",
+          id: graphic.id,
+          from,
+          to: from.map(([lng, lat]) => [lng + dx, lat + dy]),
+        });
+      };
+      map.on("mousemove", onMove);
+      map.on("mouseup", onUp);
+    });
     map.on("dblclick", (event) => {
-      const placing = stateRef.current.placing;
+      const current = stateRef.current;
+      const placing = current.placing;
       if (!placing) return;
-      const kind = placing.mode === "symbol" ? placing.symbol.kind : placing.kind;
-      if (kind === "point" || kind === "pin" || kind === "text") return;
+      if (placing.mode === "symbol") {
+        if (symbolContract(placing.symbol.basicId, current.options.standard).mode === "point") return;
+      } else if (placing.kind === "pin" || placing.kind === "text") return;
       event.preventDefault();
       dispatch({ type: "finish-draft" });
     });
+    let pointerFrame = 0;
+    let pendingPointer: [number, number] | null = null;
     map.on("mousemove", (event) => {
-      if (!stateRef.current.options.cursorCoordinate) return;
-      dispatch({ type: "cursor", lngLat: [event.lngLat.lng, event.lngLat.lat] });
+      const current = stateRef.current;
+      if (!current.options.cursorCoordinate && !current.placing && !current.options.measure) return;
+      pendingPointer = [event.lngLat.lng, event.lngLat.lat];
+      if (pointerFrame) return;
+      pointerFrame = requestAnimationFrame(() => {
+        pointerFrame = 0;
+        if (pendingPointer) dispatch({ type: "cursor", lngLat: pendingPointer });
+      });
     });
     map.on("mouseout", () => dispatch({ type: "cursor", lngLat: null }));
     map.on("moveend", () => {
       if (!map.getSource("grid")) return;
       const current = stateRef.current;
       setData(map, "grid", current.options.grid ? graticule(map) : { type: "FeatureCollection", features: [] });
-      if (
-        map.getSource("measures") &&
-        current.graphics.some((graphic) => graphic.renderer === "symbol" && (graphic.kind === "line" || graphic.kind === "area"))
-      ) {
-        setData(map, "measures", { type: "FeatureCollection", features: measureFeatures(map, current) });
+      if (map.getSource("measures")) {
+        const vectors = placementVectors(map, current);
+        setData(map, "measures", { type: "FeatureCollection", features: vectors.measures });
+        setData(map, "draft", lineCollection(vectors.draft, "#e65100"));
       }
     });
 
@@ -146,12 +228,20 @@ export function MapCanvas({ mapRef }: { mapRef: MutableRefObject<Map | null> }) 
       observer.disconnect();
       markers.current.forEach((marker) => marker.remove());
       markers.current.clear();
+      anchors.current.forEach((marker) => marker.remove());
+      anchors.current.clear();
       map.remove();
       mapRef.current = null;
     };
     // The map instance lives for the lifetime of the page.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dispatch, mapRef]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map?.isStyleLoaded()) return;
+    syncMcooHatch(map, mcoo);
+  }, [mapRef, mcoo]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -166,17 +256,14 @@ export function MapCanvas({ mapRef }: { mapRef: MutableRefObject<Map | null> }) 
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
-    const placing = state.placing;
-    const kind = placing ? (placing.mode === "symbol" ? placing.symbol.kind : placing.kind) : null;
-    const multi = kind && kind !== "point" && kind !== "pin" && kind !== "text";
-    if (multi) map.doubleClickZoom.disable();
+    if (placingIsMulti(state.placing, state.options.standard)) map.doubleClickZoom.disable();
     else map.doubleClickZoom.enable();
-  }, [mapRef, state.placing]);
+  }, [mapRef, state.options.standard, state.placing]);
 
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !map.isStyleLoaded()) return;
-    draw(map, state, markers.current, dispatch);
+    draw(map, state, markers.current, anchors.current, stateRef, dispatch);
   }, [
     dispatch,
     mapRef,
@@ -186,6 +273,29 @@ export function MapCanvas({ mapRef }: { mapRef: MutableRefObject<Map | null> }) 
     state.measurePts,
     state.options,
     state.selectedId,
+  ]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map?.isStyleLoaded() || !map.getSource("draft")) return;
+    if (!state.placing) return;
+    const vectors = placementVectors(map, state);
+    setData(map, "measures", { type: "FeatureCollection", features: vectors.measures });
+    setData(map, "draft", lineCollection(vectors.draft, "#e65100"));
+  }, [
+    mapRef,
+    state.activeLayerId,
+    state.cursor,
+    state.draft,
+    state.galleryAffiliation,
+    state.galleryEchelon,
+    state.galleryFeint,
+    state.galleryHeadquarters,
+    state.galleryReinforced,
+    state.galleryStatus,
+    state.galleryTaskForce,
+    state.options,
+    state.placing,
   ]);
 
   useEffect(() => {
@@ -305,6 +415,49 @@ function ensureLayers(map: Map) {
       },
     });
   }
+  if (!map.getLayer("measures-outline")) {
+    map.addLayer({
+      id: "measures-outline",
+      type: "line",
+      source: "measures",
+      filter: ["all", ["!=", ["geometry-type"], "Point"], ["!=", ["get", "dashed"], 1]],
+      layout: { "line-cap": "round", "line-join": "round" },
+      paint: {
+        "line-color": "#000000",
+        "line-width": ["+", ["coalesce", ["get", "strokeWidth"], 2], 3.5],
+        "line-opacity": ["coalesce", ["get", "lineOpacity"], 1],
+      },
+    });
+  }
+  if (!map.getLayer("measures-outline-dashed")) {
+    map.addLayer({
+      id: "measures-outline-dashed",
+      type: "line",
+      source: "measures",
+      filter: ["all", ["!=", ["geometry-type"], "Point"], ["==", ["get", "dashed"], 1]],
+      layout: { "line-cap": "butt", "line-join": "round" },
+      paint: {
+        "line-color": "#000000",
+        "line-width": ["+", ["coalesce", ["get", "strokeWidth"], 2], 3.5],
+        "line-opacity": ["coalesce", ["get", "lineOpacity"], 1],
+        "line-dasharray": [2, 1.4],
+      },
+    });
+  }
+  if (!map.getLayer("measures-select")) {
+    map.addLayer({
+      id: "measures-select",
+      type: "line",
+      source: "measures",
+      filter: ["all", ["!=", ["geometry-type"], "Point"], ["==", ["get", "selected"], 1]],
+      layout: { "line-cap": "round", "line-join": "round" },
+      paint: {
+        "line-color": "#e65100",
+        "line-width": ["+", ["coalesce", ["get", "strokeWidth"], 2], 6],
+        "line-opacity": 0.85,
+      },
+    });
+  }
   if (!map.getLayer("measures-line")) {
     map.addLayer({
       id: "measures-line",
@@ -313,8 +466,8 @@ function ensureLayers(map: Map) {
       filter: ["all", ["!=", ["geometry-type"], "Point"], ["!=", ["get", "dashed"], 1]],
       layout: { "line-cap": "round", "line-join": "round" },
       paint: {
-        "line-color": ["case", ["==", ["get", "selected"], 1], "#e65100", ["coalesce", ["get", "strokeColor"], "#111111"]],
-        "line-width": ["case", ["==", ["get", "selected"], 1], ["+", ["coalesce", ["get", "strokeWidth"], 2], 1], ["coalesce", ["get", "strokeWidth"], 2]],
+        "line-color": ["coalesce", ["get", "strokeColor"], "#111111"],
+        "line-width": ["coalesce", ["get", "strokeWidth"], 2],
         "line-opacity": ["coalesce", ["get", "lineOpacity"], 1],
       },
     });
@@ -327,13 +480,20 @@ function ensureLayers(map: Map) {
       filter: ["all", ["!=", ["geometry-type"], "Point"], ["==", ["get", "dashed"], 1]],
       layout: { "line-cap": "butt", "line-join": "round" },
       paint: {
-        "line-color": ["case", ["==", ["get", "selected"], 1], "#e65100", ["coalesce", ["get", "strokeColor"], "#111111"]],
+        "line-color": ["coalesce", ["get", "strokeColor"], "#111111"],
         "line-width": ["coalesce", ["get", "strokeWidth"], 2],
         "line-opacity": ["coalesce", ["get", "lineOpacity"], 1],
         "line-dasharray": [2, 1.4],
       },
     });
   }
+  map.setPaintProperty("measures-line", "line-color", ["coalesce", ["get", "strokeColor"], "#80E0FF"]);
+  map.setPaintProperty("measures-line", "line-width", ["+", ["coalesce", ["get", "strokeWidth"], 2], 1]);
+  map.setPaintProperty("measures-dashed", "line-color", ["coalesce", ["get", "strokeColor"], "#80E0FF"]);
+  map.setPaintProperty("measures-dashed", "line-width", ["+", ["coalesce", ["get", "strokeWidth"], 2], 1]);
+  if (map.getLayer("measures-line") && map.getLayer("measures-outline")) map.moveLayer("measures-outline", "measures-line");
+  if (map.getLayer("measures-dashed") && map.getLayer("measures-outline-dashed")) map.moveLayer("measures-outline-dashed", "measures-dashed");
+  if (map.getLayer("measures-outline") && map.getLayer("measures-select")) map.moveLayer("measures-select", "measures-outline");
   if (!map.getLayer("measures-label")) {
     map.addLayer({
       id: "measures-label",
@@ -380,6 +540,8 @@ function draw(
   map: Map,
   state: ReturnType<typeof useMapStore>["state"],
   markers: globalThis.Map<string, maplibregl.Marker>,
+  anchors: globalThis.Map<string, maplibregl.Marker>,
+  stateRef: MutableRefObject<ReturnType<typeof useMapStore>["state"]>,
   dispatch: ReturnType<typeof useMapStore>["dispatch"],
 ) {
   if (!map.isStyleLoaded()) return;
@@ -434,9 +596,11 @@ function draw(
   }
 
   setData(map, "graphics", { type: "FeatureCollection", features });
-  setData(map, "measures", { type: "FeatureCollection", features: measureFeatures(map, state) });
-  setData(map, "draft", lineCollection(state.draft, "#e65100"));
+  const vectors = placementVectors(map, state);
+  setData(map, "measures", { type: "FeatureCollection", features: vectors.measures });
+  setData(map, "draft", lineCollection(vectors.draft, "#e65100"));
   setData(map, "measure", lineCollection(state.measurePts, "#111"));
+  syncAnchors(map, state, anchors, stateRef, dispatch);
   setData(map, "grid", state.options.grid ? graticule(map) : { type: "FeatureCollection", features: [] });
 }
 
@@ -459,13 +623,14 @@ function measureFeatures(map: Map, state: ReturnType<typeof useMapStore>["state"
   for (const graphic of state.graphics) {
     if (!layerVisible(graphic, state.layers)) continue;
     if (graphic.renderer !== "symbol" || (graphic.kind !== "line" && graphic.kind !== "area")) continue;
-    if (graphic.coordinates.length < 2) continue;
+    if (graphic.coordinates.length < 1) continue;
     const selected = state.selectedId === graphic.id;
     const rendered = renderControlMeasure(graphic, state.options, frame, selected);
     if (rendered?.length) {
       features.push(...rendered);
       continue;
     }
+    if (graphic.coordinates.length < 2) continue;
     const ring = outlineOf(graphic);
     if (ring.length < 2) continue;
     const label = [graphic.modifiers.uniqueDesignation, graphic.name].filter(Boolean).join(" · ");
@@ -481,6 +646,277 @@ function measureFeatures(map: Map, state: ReturnType<typeof useMapStore>["state"
     });
   }
   return features;
+}
+
+function rubberPoints(state: ReturnType<typeof useMapStore>["state"]): [number, number][] {
+  if (!placingIsMulti(state.placing, state.options.standard)) return [];
+  const points = [...state.draft];
+  const cursor = state.cursor;
+  if (!cursor) return points;
+  const last = points[points.length - 1];
+  if (last && last[0] === cursor[0] && last[1] === cursor[1]) return points;
+  return [...points, cursor];
+}
+
+function previewGraphic(state: ReturnType<typeof useMapStore>["state"]): Graphic | null {
+  const placing = state.placing;
+  if (!placing || placing.mode !== "symbol") return null;
+  const contract = symbolContract(placing.symbol.basicId, state.options.standard);
+  if (contract.mode === "point") return null;
+  const points = rubberPoints(state);
+  if (points.length < contract.minPoints) return null;
+  const coordinates = contract.maxPoints != null && points.length > contract.maxPoints ? points.slice(0, contract.maxPoints) : points;
+  const symbol = placing.symbol;
+  return {
+    id: "draft",
+    layerId: state.activeLayerId,
+    name: symbol.name,
+    renderer: "symbol",
+    kind: symbol.kind,
+    basicId: symbol.basicId,
+    affiliation: state.galleryAffiliation,
+    status: state.galleryStatus,
+    echelon: state.galleryEchelon,
+    headquarters: state.galleryHeadquarters,
+    taskForce: state.galleryTaskForce,
+    feint: state.galleryFeint,
+    color: affiliationColor(state.galleryAffiliation),
+    coordinates,
+    modifiers: defaultModifiers(symbol.basicId, state.options.standard, state.galleryReinforced),
+  };
+}
+
+function placementVectors(map: Map, state: ReturnType<typeof useMapStore>["state"]) {
+  const measures = measureFeatures(map, state);
+  const graphic = previewGraphic(state);
+  const rendered = graphic ? renderControlMeasure(graphic, state.options, mapFrame(map), false) : null;
+  if (rendered?.length) return { measures: [...measures, ...rendered], draft: [] as [number, number][] };
+  return { measures, draft: rubberPoints(state) };
+}
+
+function featureId(map: Map, point: maplibregl.PointLike) {
+  const layers = [
+    "graphics-fill",
+    "graphics-line",
+    "graphics-dashed",
+    "measures-fill",
+    "measures-select",
+    "measures-outline",
+    "measures-outline-dashed",
+    "measures-line",
+    "measures-dashed",
+    "measures-label",
+  ].filter((id) => map.getLayer(id));
+  if (!layers.length) return null;
+  const hits = map.queryRenderedFeatures(point, { layers });
+  for (const hit of hits) {
+    const id = hit.properties?.id;
+    if (typeof id === "string" && id !== "draft") return id;
+  }
+  return null;
+}
+
+function placeHandle(
+  map: Map,
+  anchors: globalThis.Map<string, maplibregl.Marker>,
+  wanted: Set<string>,
+  stateRef: MutableRefObject<ReturnType<typeof useMapStore>["state"]>,
+  dispatch: ReturnType<typeof useMapStore>["dispatch"],
+  graphic: Graphic,
+  kind: "move" | "scale" | "rotate",
+  position: [number, number],
+) {
+  const key = `${graphic.id}:${kind}`;
+  wanted.add(key);
+  let marker = anchors.get(key);
+  if (!marker) {
+    const element = document.createElement("button");
+    element.type = "button";
+    element.className = kind === "move" ? "move-handle" : kind === "scale" ? "scale-handle" : "rotate-handle";
+    element.title = kind === "move" ? "Move" : kind === "scale" ? "Scale" : "Rotate";
+    element.setAttribute("aria-label", kind === "move" ? "Move symbol" : kind === "scale" ? "Scale symbol" : "Rotate symbol");
+    element.addEventListener("click", (event) => event.stopPropagation());
+    element.addEventListener("contextmenu", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const host = map.getContainer().getBoundingClientRect();
+      const lngLat = map.unproject([event.clientX - host.left, event.clientY - host.top]);
+      dispatch({
+        type: "menu",
+        menu: { x: event.clientX, y: event.clientY, lng: lngLat.lng, lat: lngLat.lat, id: graphic.id },
+      });
+    });
+    let origin: [number, number][] = [];
+    let startLng = 0;
+    let startLat = 0;
+    let startScale = 1;
+    let startRotation = 0;
+    marker = new maplibregl.Marker({
+      element,
+      draggable: true,
+      anchor: "center",
+      offset: kind === "scale" ? [12, -12] : kind === "rotate" ? [0, -10] : [0, 0],
+    })
+      .setLngLat(position)
+      .addTo(map);
+    marker.on("dragstart", () => {
+      element.dataset.dragging = "1";
+      const current = stateRef.current.graphics.find((item) => item.id === graphic.id);
+      origin = current ? current.coordinates.map((point) => [point[0], point[1]] as [number, number]) : [];
+      startScale = current ? graphicScale(current) : 1;
+      startRotation = current ? graphicRotation(current) : 0;
+      const lngLat = marker?.getLngLat();
+      startLng = lngLat?.lng ?? position[0];
+      startLat = lngLat?.lat ?? position[1];
+    });
+    marker.on("drag", () => {
+      const lngLat = marker?.getLngLat();
+      if (!lngLat || !origin.length) return;
+      if (kind === "move") {
+        dispatch({
+          type: "move",
+          id: graphic.id,
+          history: false,
+          coordinates: origin.map(([lng, lat]) => [lng + lngLat.lng - startLng, lat + lngLat.lat - startLat]),
+        });
+        return;
+      }
+      const [originX, originY] = centroid(origin);
+      if (kind === "rotate") {
+        const startBearing = bearingFromNorth([originX, originY], [startLng, startLat]);
+        const bearing = bearingFromNorth([originX, originY], [lngLat.lng, lngLat.lat]);
+        dispatch({ type: "rotate", id: graphic.id, history: false, rotation: startRotation + bearing - startBearing });
+        return;
+      }
+      const basis = Math.hypot(startLng - originX, startLat - originY) / startScale || 1e-9;
+      dispatch({
+        type: "scale",
+        id: graphic.id,
+        history: false,
+        scale: Math.hypot(lngLat.lng - originX, lngLat.lat - originY) / basis,
+      });
+    });
+    marker.on("dragend", () => {
+      delete element.dataset.dragging;
+      const lngLat = marker?.getLngLat();
+      if (!lngLat || !origin.length) return;
+      if (kind === "move") {
+        dispatch({
+          type: "commit-move",
+          id: graphic.id,
+          from: origin,
+          to: origin.map(([lng, lat]) => [lng + lngLat.lng - startLng, lat + lngLat.lat - startLat]),
+        });
+        return;
+      }
+      const [originX, originY] = centroid(origin);
+      if (kind === "rotate") {
+        const startBearing = bearingFromNorth([originX, originY], [startLng, startLat]);
+        const bearing = bearingFromNorth([originX, originY], [lngLat.lng, lngLat.lat]);
+        dispatch({
+          type: "rotate",
+          id: graphic.id,
+          rotation: startRotation + bearing - startBearing,
+          from: startRotation,
+        });
+        return;
+      }
+      const basis = Math.hypot(startLng - originX, startLat - originY) / startScale || 1e-9;
+      dispatch({
+        type: "scale",
+        id: graphic.id,
+        scale: Math.hypot(lngLat.lng - originX, lngLat.lat - originY) / basis,
+        from: startScale,
+      });
+    });
+    anchors.set(key, marker);
+  } else if (!marker.getElement().dataset.dragging) {
+    marker.setLngLat(position);
+  }
+}
+
+function syncAnchors(
+  map: Map,
+  state: ReturnType<typeof useMapStore>["state"],
+  anchors: globalThis.Map<string, maplibregl.Marker>,
+  stateRef: MutableRefObject<ReturnType<typeof useMapStore>["state"]>,
+  dispatch: ReturnType<typeof useMapStore>["dispatch"],
+) {
+  const graphic = state.graphics.find((item) => item.id === state.selectedId);
+  const layer = graphic ? state.layers.find((item) => item.id === graphic.layerId) : undefined;
+  const editable = Boolean(
+    graphic &&
+      !layer?.locked &&
+      layer?.visible !== false &&
+      graphic.renderer === "symbol" &&
+      (graphic.kind === "line" || graphic.kind === "area") &&
+      graphic.coordinates.length > 0,
+  );
+  const wanted = new Set<string>();
+  if (editable && graphic) {
+    const shown = shownCoordinates(graphic);
+    shown.forEach((coord, index) => {
+      const key = `${graphic.id}:${index}`;
+      wanted.add(key);
+      let marker = anchors.get(key);
+      if (!marker) {
+        const element = document.createElement("button");
+        element.type = "button";
+        element.className = "anchor-handle";
+        element.title = `Point ${index + 1}`;
+        element.setAttribute("aria-label", `Point ${index + 1}`);
+        element.addEventListener("click", (event) => event.stopPropagation());
+        element.addEventListener("contextmenu", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          const host = map.getContainer().getBoundingClientRect();
+          const lngLat = map.unproject([event.clientX - host.left, event.clientY - host.top]);
+          dispatch({
+            type: "menu",
+            menu: { x: event.clientX, y: event.clientY, lng: lngLat.lng, lat: lngLat.lat, id: graphic.id },
+          });
+        });
+        marker = new maplibregl.Marker({ element, draggable: true, anchor: "center" }).setLngLat(coord).addTo(map);
+        marker.getElement().setAttribute("aria-label", `Point ${index + 1}`);
+        marker.on("dragstart", () => {
+          element.dataset.dragging = "1";
+        });
+        marker.on("dragend", () => {
+          delete element.dataset.dragging;
+          const lngLat = marker?.getLngLat();
+          if (!lngLat) return;
+          const current = stateRef.current.graphics.find((item) => item.id === graphic.id);
+          if (!current) return;
+          const scale = canScaleGraphic(current) ? graphicScale(current) : 1;
+          const rotation = canScaleGraphic(current) ? graphicRotation(current) : 0;
+          const base = toBasePoint(current.coordinates, scale, rotation, [lngLat.lng, lngLat.lat]);
+          const coordinates = current.coordinates.map((point, pointIndex) => (pointIndex === index ? base : point));
+          dispatch({ type: "move", id: graphic.id, coordinates });
+        });
+        anchors.set(key, marker);
+      } else if (!marker.getElement().dataset.dragging) {
+        marker.setLngLat(coord);
+        marker.getElement().setAttribute("aria-label", `Point ${index + 1}`);
+      }
+    });
+    placeHandle(map, anchors, wanted, stateRef, dispatch, graphic, "move", centroid(shown));
+    if (canScaleGraphic(graphic)) {
+      let east = -Infinity;
+      let north = -Infinity;
+      for (const [lng, lat] of shown) {
+        if (lng > east) east = lng;
+        if (lat > north) north = lat;
+      }
+      placeHandle(map, anchors, wanted, stateRef, dispatch, graphic, "scale", [east, north]);
+      placeHandle(map, anchors, wanted, stateRef, dispatch, graphic, "rotate", rotationHandlePosition(graphic));
+    }
+  }
+  for (const [key, marker] of anchors) {
+    if (!wanted.has(key)) {
+      marker.remove();
+      anchors.delete(key);
+    }
+  }
 }
 
 function lineCollection(coords: [number, number][], color: string): FeatureCollection {
@@ -508,6 +944,11 @@ function upsertMarker(
   const locked = state.layers.find((layer) => layer.id === graphic.layerId)?.locked;
   const element = document.createElement("div");
   element.className = `symbol-marker${selected ? " selected" : ""}`;
+  const turn = canScaleGraphic(graphic) ? graphicRotation(graphic) : 0;
+  if (turn) {
+    element.style.transform = `rotate(${turn}deg)`;
+    element.style.transformOrigin = "center center";
+  }
   let anchor:
     | "center"
     | "top"
@@ -543,6 +984,16 @@ function upsertMarker(
   element.addEventListener("click", (event) => {
     event.stopPropagation();
     dispatch({ type: "select", id: graphic.id });
+  });
+  element.addEventListener("contextmenu", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const host = map.getContainer().getBoundingClientRect();
+    const lngLat = map.unproject([event.clientX - host.left, event.clientY - host.top]);
+    dispatch({
+      type: "menu",
+      menu: { x: event.clientX, y: event.clientY, lng: lngLat.lng, lat: lngLat.lat, id: graphic.id },
+    });
   });
   markers.get(graphic.id)?.remove();
   const marker = new maplibregl.Marker({ element, anchor, offset, draggable: !locked })

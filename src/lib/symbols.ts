@@ -1,13 +1,16 @@
 import {
+  DrawRules,
   MilStdAttributes,
   MilStdIconRenderer,
   Modifiers,
+  MSLookup,
   SymbolID,
   SymbolUtilities,
   WebRenderer,
 } from "@armyc2.c5isr.renderer/mil-sym-ts-web";
 import type { Feature, Position } from "geojson";
-import type { Affiliation, Graphic, Modifiers as ModifierText, Presence, ViewOptions } from "./types";
+import { sectionOfBasicId } from "./catalog";
+import { EMPTY_MODIFIERS, type Affiliation, type Graphic, type Modifiers as ModifierText, type Placing, type Presence, type ViewOptions } from "./types";
 
 export type DrawnSymbol = {
   svg: string;
@@ -16,6 +19,95 @@ export type DrawnSymbol = {
   anchorX: number;
   anchorY: number;
 };
+
+/** One click, a fixed anchor count, or an open line or area. */
+export type DrawMode = "point" | "fixed" | "open";
+
+export type SymbolContract = {
+  minPoints: number;
+  /** Null when the symbol accepts as many anchors as the user draws. */
+  maxPoints: number | null;
+  modifiers: string[];
+  mode: DrawMode;
+  /** Required distance in meters. Empty when the graphic does not need one. */
+  distance: string;
+  /** Required azimuth in degrees. Empty when the graphic does not need one. */
+  azimuth: string;
+};
+
+const HUGE_POINT_COUNT = 24;
+const contractCache = new Map<string, SymbolContract>();
+
+/** Counts the renderer requires before a corridor, ring, ellipse, or sector will draw. */
+function amplifierDefaults(drawRule: number) {
+  const width = "1000";
+  const radii = "1000,500";
+  const bearing = "0";
+  const sector = "315,45";
+  if (drawRule === DrawRules.ELLIPSE1 || drawRule === DrawRules.RECTANGULAR2 || drawRule === DrawRules.POINT17) {
+    return { distance: radii, azimuth: bearing };
+  }
+  if (drawRule === DrawRules.POINT18 || drawRule === DrawRules.ARC1) {
+    return { distance: radii, azimuth: sector };
+  }
+  if (
+    drawRule === DrawRules.CIRCULAR1 ||
+    drawRule === DrawRules.CIRCULAR2 ||
+    drawRule === DrawRules.RECTANGULAR1 ||
+    drawRule === DrawRules.RECTANGULAR3 ||
+    drawRule === DrawRules.CORRIDOR1
+  ) {
+    return { distance: width, azimuth: "" };
+  }
+  return { distance: "", azimuth: "" };
+}
+
+/** Anchor count and allowed amplifiers for one symbol, from the MIL-STD lookup. */
+export function symbolContract(basicId: string, standard: ViewOptions["standard"]): SymbolContract {
+  const id = (basicId || "").padEnd(8, "0").slice(0, 8);
+  const key = `${standard}:${id}`;
+  const cached = contractCache.get(key);
+  if (cached) return cached;
+  const version = standard === "APP6" ? SymbolID.Version_APP6D : SymbolID.Version_2525Dch1;
+  const lookup = MSLookup.getInstance();
+  let info = lookup.getMSLInfo(id, version);
+  if (!info && version !== SymbolID.Version_2525Dch1) info = lookup.getMSLInfo(id, SymbolID.Version_2525Dch1);
+  const geometry = String(info?.getGeometry() || "point").toLowerCase();
+  const minPoints = Math.max(1, Number(info?.getMinPointCount()) || 1);
+  const rawMax = Number(info?.getMaxPointCount());
+  const maxPoints = Number.isFinite(rawMax) && rawMax <= HUGE_POINT_COUNT ? Math.max(minPoints, rawMax) : null;
+  let mode: DrawMode = "open";
+  if (geometry === "point" || (minPoints <= 1 && (maxPoints == null || maxPoints <= 1))) mode = "point";
+  else if (maxPoints != null && minPoints === maxPoints) mode = "fixed";
+  const modifiers = info?.getModifiers() ?? [];
+  const defaults = amplifierDefaults(Number(info?.getDrawRule()) || 0);
+  const contract: SymbolContract = {
+    minPoints,
+    maxPoints,
+    modifiers,
+    mode,
+    distance: modifiers.includes(Modifiers.AM_DISTANCE) ? defaults.distance : "",
+    azimuth: modifiers.includes(Modifiers.AN_AZIMUTH) ? defaults.azimuth : "",
+  };
+  contractCache.set(key, contract);
+  return contract;
+}
+
+export function defaultModifiers(basicId: string, standard: ViewOptions["standard"], reinforced = ""): ModifierText {
+  const contract = symbolContract(basicId, standard);
+  return {
+    ...EMPTY_MODIFIERS,
+    reinforcedReduced: reinforced,
+    distance: contract.distance,
+    azimuth: contract.azimuth,
+  };
+}
+
+export function placingIsMulti(placing: Placing | null, standard: ViewOptions["standard"]) {
+  if (!placing) return false;
+  if (placing.mode === "generic") return placing.kind !== "pin" && placing.kind !== "text";
+  return symbolContract(placing.symbol.basicId, standard).mode !== "point";
+}
 
 const BLANK = "0".repeat(30);
 
@@ -78,19 +170,24 @@ function modifierMap(graphic: Graphic, sidc: string) {
     [Modifiers.W_DTG_1, graphic.modifiers.dtg],
     [Modifiers.X_ALTITUDE_DEPTH, graphic.modifiers.altitudeDepth],
     [Modifiers.Q_DIRECTION_OF_MOVEMENT, graphic.modifiers.direction],
+    [Modifiers.AM_DISTANCE, graphic.modifiers.distance],
+    [Modifiers.AN_AZIMUTH, graphic.modifiers.azimuth],
   ];
   for (const [key, value] of fields) {
-    const text = value.trim();
+    const text = String(value || "").trim();
     if (text && SymbolUtilities.hasModifier(sidc, key)) map.set(key, text);
   }
   return map;
 }
 
-function presentSymbol(svg: string, view: ViewOptions) {
-  let next = svg
-    .replace(/<desc>[\s\S]*?<\/desc>/g, "")
-    .replace(/<metadata>[\s\S]*?<\/metadata>/g, "")
-    .replace(/\s(?:width|height)="[^"]*"/g, "");
+function presentSymbol(svg: string, view: ViewOptions, width = 0, height = 0) {
+  let next = svg.replace(/<desc>[\s\S]*?<\/desc>/g, "").replace(/<metadata>[\s\S]*?<\/metadata>/g, "");
+  next = next.replace(/<svg\b([^>]*)>/i, (_match, attrs: string) => `<svg${attrs.replace(/\s(?:width|height)="[^"]*"/g, "")}>`);
+  if (!/<svg[\s>]/i.test(next) && width > 0 && height > 0) {
+    next = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}">${next}</svg>`;
+  } else if (/<svg[\s>]/i.test(next) && !/viewBox=/.test(next) && width > 0 && height > 0) {
+    next = next.replace(/<svg/i, `<svg viewBox="0 0 ${width} ${height}"`);
+  }
   next = /preserveAspectRatio=/.test(next)
     ? next.replace(/preserveAspectRatio="[^"]*"/, 'preserveAspectRatio="xMidYMid meet"')
     : next.replace("<svg", '<svg preserveAspectRatio="xMidYMid meet"');
@@ -112,12 +209,13 @@ export function renderSymbol(
 ): DrawnSymbol | null {
   if (!graphic.basicId) return null;
   const sidc = buildSidc(graphic, view.standard);
-  const key = [sidc, size, iconOnly, view.symbolFill, view.symbolFrame, view.shadow, iconOnly ? "" : JSON.stringify(graphic.modifiers)].join("|");
+  const key = [sidc, size, graphic.scale ?? 1, iconOnly, view.symbolFill, view.symbolFrame, view.shadow, iconOnly ? "" : JSON.stringify(graphic.modifiers)].join("|");
   const cached = cache.get(key);
   if (cached !== undefined) return cached;
 
   const attributes = new Map<string, string>();
-  attributes.set(MilStdAttributes.PixelSize, String(Math.max(16, Math.round(size))));
+  const pixel = Math.max(16, Math.round(size * (canScaleGraphic(graphic) ? graphicScale(graphic) : 1)));
+  attributes.set(MilStdAttributes.PixelSize, String(pixel));
   attributes.set(MilStdAttributes.KeepUnitRatio, "true");
   if (iconOnly) attributes.set(MilStdAttributes.DrawAsIcon, "true");
   if (view.shadow) attributes.set(MilStdAttributes.OutlineSymbol, "true");
@@ -129,7 +227,7 @@ export function renderSymbol(
   }
   const bounds = drawn.getImageBounds();
   const result: DrawnSymbol = {
-    svg: presentSymbol(drawn.getSVG(), view),
+    svg: presentSymbol(drawn.getSVG(), view, Math.max(1, bounds.getWidth()), Math.max(1, bounds.getHeight())),
     width: Math.max(1, bounds.getWidth()),
     height: Math.max(1, bounds.getHeight()),
     anchorX: drawn.getSymbolCenterX(),
@@ -163,6 +261,8 @@ export const TEXT_MODIFIERS: { key: keyof ModifierText; label: string; modifier:
   { key: "dtg", label: "Date-time group", modifier: Modifiers.W_DTG_1 },
   { key: "altitudeDepth", label: "Altitude / depth", modifier: Modifiers.X_ALTITUDE_DEPTH },
   { key: "direction", label: "Direction (°)", modifier: Modifiers.Q_DIRECTION_OF_MOVEMENT },
+  { key: "distance", label: "Distance (m)", modifier: Modifiers.AM_DISTANCE },
+  { key: "azimuth", label: "Azimuth (°)", modifier: Modifiers.AN_AZIMUTH },
 ];
 
 export type MapFrame = {
@@ -174,11 +274,123 @@ export type MapFrame = {
   height: number;
 };
 
+/** Formations keep their fixed frame. Every other symbol can be resized after it is drawn. */
+export function canScaleGraphic(graphic: Pick<Graphic, "renderer" | "basicId">) {
+  return graphic.renderer === "symbol" && Boolean(graphic.basicId) && sectionOfBasicId(graphic.basicId) !== "formations";
+}
+
+export function graphicScale(graphic: { scale?: number }) {
+  const value = graphic.scale ?? 1;
+  return Number.isFinite(value) && value > 0 ? value : 1;
+}
+
+/** Clockwise degrees, wrapped to -180…180. */
+export function graphicRotation(graphic: { rotation?: number }) {
+  const value = graphic.rotation ?? 0;
+  if (!Number.isFinite(value)) return 0;
+  return ((((value + 180) % 360) + 360) % 360) - 180;
+}
+
+export function centroid(coordinates: [number, number][]): [number, number] {
+  if (!coordinates.length) return [0, 0];
+  const lng = coordinates.reduce((sum, point) => sum + point[0], 0) / coordinates.length;
+  const lat = coordinates.reduce((sum, point) => sum + point[1], 0) / coordinates.length;
+  return [lng, lat];
+}
+
+/** Visible anchors. The stored points stay put and scale grows or shrinks them around their center. */
+export function scaledCoordinates(coordinates: [number, number][], scale: number): [number, number][] {
+  if (coordinates.length < 2 || scale === 1) return coordinates;
+  const [originX, originY] = centroid(coordinates);
+  return coordinates.map(([lng, lat]) => [originX + (lng - originX) * scale, originY + (lat - originY) * scale]);
+}
+
+function eastScale(lat: number) {
+  return Math.cos((lat * Math.PI) / 180) || 1;
+}
+
+/** Rotate one point around an origin. Positive degrees are counterclockwise in map space. */
+export function rotateAround(origin: [number, number], point: [number, number], degrees: number): [number, number] {
+  if (!degrees) return point;
+  const kx = eastScale(origin[1]);
+  const x = (point[0] - origin[0]) * kx;
+  const y = point[1] - origin[1];
+  const rad = (degrees * Math.PI) / 180;
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+  return [origin[0] + (x * cos - y * sin) / kx, origin[1] + x * sin + y * cos];
+}
+
+/** Clockwise bearing from north, in degrees. */
+export function bearingFromNorth(origin: [number, number], point: [number, number]) {
+  const kx = eastScale(origin[1]);
+  const x = (point[0] - origin[0]) * kx;
+  const y = point[1] - origin[1];
+  return (Math.atan2(x, y) * 180) / Math.PI;
+}
+
+export function shownCoordinates(graphic: Graphic): [number, number][] {
+  const adjustable = canScaleGraphic(graphic);
+  const scale = adjustable ? graphicScale(graphic) : 1;
+  const rotation = adjustable ? graphicRotation(graphic) : 0;
+  if (graphic.coordinates.length < 2 || (scale === 1 && rotation === 0)) return graphic.coordinates;
+  const origin = centroid(graphic.coordinates);
+  return graphic.coordinates.map((point) => {
+    const scaled: [number, number] =
+      scale === 1 ? point : [origin[0] + (point[0] - origin[0]) * scale, origin[1] + (point[1] - origin[1]) * scale];
+    return rotateAround(origin, scaled, -rotation);
+  });
+}
+
+/** Stored anchor for a point the user dragged on the rotated, scaled symbol. */
+export function toBasePoint(coordinates: [number, number][], scale: number, rotation: number, displayed: [number, number]): [number, number] {
+  const origin = centroid(coordinates);
+  const unrotated = rotateAround(origin, displayed, rotation);
+  if (scale === 1) return unrotated;
+  return [origin[0] + (unrotated[0] - origin[0]) / scale, origin[1] + (unrotated[1] - origin[1]) / scale];
+}
+
+/** A grab point just outside the symbol, along its clockwise heading. */
+export function rotationHandlePosition(graphic: Graphic): [number, number] {
+  const origin = centroid(graphic.coordinates);
+  const scale = canScaleGraphic(graphic) ? graphicScale(graphic) : 1;
+  const kx = eastScale(origin[1]);
+  let reach = 0;
+  for (const point of graphic.coordinates) {
+    const dist = Math.hypot((point[0] - origin[0]) * kx * scale, (point[1] - origin[1]) * scale);
+    if (dist > reach) reach = dist;
+  }
+  const north: [number, number] = [origin[0], origin[1] + Math.max(reach * 1.45, 1e-4)];
+  return rotateAround(origin, north, -(canScaleGraphic(graphic) ? graphicRotation(graphic) : 0));
+}
+
+/** Official frame colors: the same cyan, red, green, and yellow as unit symbols. */
+export function frameColor(code: string) {
+  if (code === "H") return "#FF8080";
+  if (code === "N") return "#AAFFAA";
+  if (code === "U") return "#FFFF80";
+  return "#80E0FF";
+}
+
+function paintAffiliation(features: Feature[], affiliation: string): Feature[] {
+  const color = frameColor(affiliation);
+  return features.map((feature) => ({
+    ...feature,
+    properties: {
+      ...(feature.properties || {}),
+      strokeColor: color,
+      fontColor: "#111111",
+      ...(feature.properties?.fillColor ? { fillColor: color } : {}),
+    },
+  }));
+}
+
 /** Real multipoint geometry for control measures and other line or area symbols. */
 export function renderControlMeasure(graphic: Graphic, view: ViewOptions, frame: MapFrame, selected: boolean): Feature[] | null {
-  const features = renderMeasureFeatures(graphic, view, frame) ?? renderMeasureFeatures(graphic, view, frameAround(graphic.coordinates, frame));
+  const shown = { ...graphic, coordinates: shownCoordinates(graphic) };
+  const features = renderMeasureFeatures(shown, view, frame) ?? renderMeasureFeatures(shown, view, frameAround(shown.coordinates, frame));
   if (!features?.length) return null;
-  return features.map((feature) => {
+  return paintAffiliation(features, graphic.affiliation).map((feature) => {
     const dash = feature.properties?.strokeDasharray;
     return {
       ...feature,
@@ -220,38 +432,57 @@ function frameAround(coordinates: [number, number][], frame: MapFrame): MapFrame
 const previewCache = new Map<string, string | null>();
 
 /** Gallery thumbnail of a line or area symbol, using the same renderer as the map. */
-export function renderMeasurePreview(graphic: Graphic, view: ViewOptions): string | null {
-  if (!graphic.basicId || graphic.kind === "point") return null;
-  const sidc = buildSidc(graphic, view.standard);
-  const key = [sidc, graphic.kind, JSON.stringify(graphic.modifiers)].join("|");
-  const cached = previewCache.get(key);
-  if (cached !== undefined) return cached;
-  const coordinates: [number, number][] =
-    graphic.kind === "area"
+function previewAnchors(contract: SymbolContract, kind: Graphic["kind"]): [number, number][] {
+  if (contract.mode === "point") return [[5, 3]];
+  const pool: [number, number][] =
+    kind === "line"
       ? [
-          [1.5, 1],
-          [8.5, 1.2],
-          [8.2, 5],
-          [1.4, 4.7],
-        ]
-      : [
           [1, 4.2],
           [3.5, 2.2],
           [6.5, 3.6],
           [9, 1.8],
+        ]
+      : [
+          [1.5, 1],
+          [8.5, 1.2],
+          [8.2, 5],
+          [1.4, 4.7],
         ];
+  const wanted = contract.maxPoints == null ? Math.max(contract.minPoints, Math.min(4, pool.length)) : contract.maxPoints;
+  const count = Math.min(pool.length, Math.max(contract.minPoints, wanted));
+  const points = pool.slice(0, Math.max(1, Math.min(pool.length, count)));
+  while (points.length < contract.minPoints) {
+    const last = points[points.length - 1];
+    points.push([last[0] + 0.4, last[1] + 0.3]);
+  }
+  return points;
+}
+
+export function renderMeasurePreview(graphic: Graphic, view: ViewOptions): string | null {
+  if (!graphic.basicId || graphic.kind === "point") return null;
+  const contract = symbolContract(graphic.basicId, view.standard);
+  const modifiers = {
+    ...graphic.modifiers,
+    distance: graphic.modifiers.distance || contract.distance,
+    azimuth: graphic.modifiers.azimuth || contract.azimuth,
+  };
+  const coordinates = previewAnchors(contract, graphic.kind);
+  const sidc = buildSidc(graphic, view.standard);
+  const key = [sidc, coordinates.join(";"), modifiers.distance, modifiers.azimuth, JSON.stringify(graphic.modifiers)].join("|");
+  const cached = previewCache.get(key);
+  if (cached !== undefined) return cached;
   const features = renderMeasureFeatures(
-    { ...graphic, id: "preview", coordinates },
+    { ...graphic, id: "preview", coordinates, modifiers },
     view,
     { west: 0, south: 0, east: 10, north: 6, width: 220, height: 140 },
   );
-  const svg = features ? featuresToSvg(features) : null;
+  const svg = features ? featuresToSvg(paintAffiliation(features, graphic.affiliation)) : null;
   previewCache.set(key, svg);
   return svg;
 }
 
 function renderMeasureFeatures(graphic: Graphic, view: ViewOptions, frame: MapFrame): Feature[] | null {
-  if (!graphic.basicId || graphic.coordinates.length < 2) return null;
+  if (!graphic.basicId || graphic.coordinates.length < 1) return null;
   const sidc = buildSidc(graphic, view.standard);
   const controlPoints = graphic.coordinates.map(([lng, lat]) => `${lng},${lat}`).join(" ");
   const bbox = `${frame.west},${frame.south},${frame.east},${frame.north}`;
@@ -317,11 +548,12 @@ function featuresToSvg(features: Feature[]) {
       if (ring.length < 2) continue;
       const path = ring.map((point, index) => `${index ? "L" : "M"}${project(point)}`).join(" ");
       const close = geometry.type === "Polygon" || geometry.type === "MultiPolygon" ? " Z" : "";
-      parts.push(`<path d="${path}${close}" fill="${fill}" stroke="${stroke}" stroke-width="2" stroke-linejoin="round"/>`);
+      parts.push(`<path d="${path}${close}" fill="none" stroke="#000000" stroke-width="4.5" stroke-linejoin="round"/>`);
+      parts.push(`<path d="${path}${close}" fill="${fill}" stroke="${stroke}" stroke-width="2.6" stroke-linejoin="round"/>`);
     }
     if (geometry.type === "Point" && feature.properties?.label) {
       parts.push(
-        `<text x="${project(geometry.coordinates).split(" ")[0]}" y="${project(geometry.coordinates).split(" ")[1]}" text-anchor="middle" font-size="12" font-family="sans-serif" fill="${stroke}">${escapeXml(String(feature.properties.label))}</text>`,
+        `<text x="${project(geometry.coordinates).split(" ")[0]}" y="${project(geometry.coordinates).split(" ")[1]}" text-anchor="middle" font-size="12" font-family="sans-serif" fill="#111111">${escapeXml(String(feature.properties.label))}</text>`,
       );
     }
   }

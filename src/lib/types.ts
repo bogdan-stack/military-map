@@ -32,6 +32,10 @@ export type Modifiers = {
   dtg: string;
   altitudeDepth: string;
   direction: string;
+  /** AM. Comma-separated meters: width, radius, or a pair of radii. */
+  distance: string;
+  /** AN. Comma-separated degrees. */
+  azimuth: string;
 };
 
 export type Graphic = {
@@ -50,6 +54,10 @@ export type Graphic = {
   /** Feint or dummy, SIDC headquarters/task-force/dummy field. */
   feint: boolean;
   color: string;
+  /** Size multiplier for symbols other than formations. 1 is the size as drawn. */
+  scale?: number;
+  /** Clockwise rotation in degrees for symbols other than formations. */
+  rotation?: number;
   coordinates: [number, number][];
   modifiers: Modifiers;
 };
@@ -108,6 +116,8 @@ export const EMPTY_MODIFIERS: Modifiers = {
   dtg: "",
   altitudeDepth: "",
   direction: "",
+  distance: "",
+  azimuth: "",
 };
 
 export const DEFAULT_OPTIONS: ViewOptions = {
