@@ -26,7 +26,7 @@ import {
   type ViewOptions,
 } from "./types";
 
-const STORAGE_KEY = "military-map-v1";
+const STORAGE_KEY = "military-map-v2";
 
 type Snapshot = {
   layers: MapLayer[];
@@ -133,7 +133,7 @@ export const initialState: MapState = {
   cursor: null,
   query: "",
   gallerySection: "formations",
-  openGroups: { "formations:Combat:Infantry": true, "formations:Combat": true },
+  openGroups: { "formations:Movement and Maneuver": true, "formations:Movement and Maneuver:Infantry": true },
 };
 
 function activeUnlocked(state: MapState) {
@@ -152,12 +152,10 @@ function makeGraphic(state: MapState, coordinates: [number, number][]): Graphic 
       name: symbol.name,
       renderer: "symbol",
       kind: symbol.kind,
-      codingscheme: symbol.codingscheme,
-      battledimension: symbol.battledimension,
-      functionid: symbol.functionid,
+      basicId: symbol.basicId,
       affiliation: "F",
       status: "P",
-      echelon: "-",
+      echelon: "00",
       headquarters: false,
       taskForce: false,
       color: affiliationColor("F"),
@@ -173,12 +171,10 @@ function makeGraphic(state: MapState, coordinates: [number, number][]): Graphic 
     name,
     renderer: "generic",
     kind,
-    codingscheme: "S",
-    battledimension: "G",
-    functionid: "------",
+    basicId: "",
     affiliation: "F",
     status: "P",
-    echelon: "-",
+    echelon: "00",
     headquarters: false,
     taskForce: false,
     color: "#1565c0",

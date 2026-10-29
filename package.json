@@ -8,9 +8,8 @@
     "start": "next start --port 3000"
   },
   "dependencies": {
+    "@armyc2.c5isr.renderer/mil-sym-ts-web": "^2.10.9",
     "maplibre-gl": "^5.6.1",
-    "mil-std-2525": "^0.2.8",
-    "milsymbol": "^3.0.5",
     "mgrs": "^2.1.0",
     "next": "^15.5.4",
     "react": "^19.1.1",

@@ -23,12 +23,10 @@ function synthetic(symbol: CatalogSymbol): Graphic {
     name: symbol.name,
     renderer: "symbol",
     kind: symbol.kind,
-    codingscheme: symbol.codingscheme,
-    battledimension: symbol.battledimension,
-    functionid: symbol.functionid,
+    basicId: symbol.basicId,
     affiliation: "F",
     status: "P",
-    echelon: "-",
+    echelon: "00",
     headquarters: false,
     taskForce: false,
     color: "#1f4bff",
@@ -37,13 +35,13 @@ function synthetic(symbol: CatalogSymbol): Graphic {
   };
 }
 
-export function SymbolThumb({ symbol, size = 22 }: { symbol: CatalogSymbol; size?: number }) {
+export function SymbolThumb({ symbol, size = 40 }: { symbol: CatalogSymbol; size?: number }) {
   const { state } = useMapStore();
   const svg = useMemo(() => {
-    const drawn = renderSymbol(synthetic(symbol), state.options, size);
-    return drawn.isValid() ? drawn.asSVG() : "";
+    const drawn = renderSymbol(synthetic(symbol), state.options, size, true);
+    return drawn?.svg ?? "";
   }, [size, state.options, symbol]);
-  if (!svg) return <span className="thumb-fallback">{symbol.name.slice(0, 4)}</span>;
+  if (!svg) return null;
   return <span className="thumb-svg" dangerouslySetInnerHTML={{ __html: svg }} />;
 }
 
@@ -51,10 +49,11 @@ export function GraphicThumb({ graphic }: { graphic: Graphic }) {
   const { state } = useMapStore();
   const svg = useMemo(() => {
     if (graphic.renderer !== "symbol") return "";
-    const drawn = renderSymbol(graphic, state.options, 26);
-    return drawn.isValid() ? drawn.asSVG() : "";
+    const drawn = renderSymbol(graphic, state.options, 36, true);
+    return drawn?.svg ?? "";
   }, [graphic, state.options]);
   if (!svg) {
+    if (graphic.renderer === "symbol") return null;
     return (
       <span className="thumb-fallback" style={{ color: graphic.color }}>
         {graphic.name.slice(0, 3)}
@@ -71,7 +70,7 @@ const SECTIONS: { id: SectionId; label: string; glyph: string }[] = [
   { id: "tactical", label: "Tactical Graphics", glyph: "⌖" },
   { id: "signals", label: "Signals Intelligence", glyph: "📡" },
   { id: "stability", label: "Stability Operations", glyph: "⚑" },
-  { id: "emergency", label: "Emergency Management", glyph: "✚" },
+  { id: "emergency", label: "METOC", glyph: "✚" },
 ];
 
 export function GalleryPanel() {
@@ -154,7 +153,7 @@ export function GalleryPanel() {
         ) : (
           [...(grouped || [])].map(([category, subs]) => {
             const catKey = `${section}:${category}`;
-            const open = state.openGroups[catKey] ?? category === "Combat";
+            const open = state.openGroups[catKey] ?? category === "Movement and Maneuver";
             return (
               <div key={catKey}>
                 <button type="button" className="subhead" onClick={() => dispatch({ type: "toggle-group", key: catKey })}>
@@ -162,22 +161,36 @@ export function GalleryPanel() {
                   <span>{open ? "▾" : "▸"}</span>
                 </button>
                 {open &&
-                  [...subs.entries()].map(([sub, items]) => {
-                    if (sub === category) {
-                      return <SymbolGrid key={`${catKey}:${sub}`} symbols={items} placingId={placingId} favorites={state.favorites} />;
-                    }
-                    const subKey = `${catKey}:${sub}`;
-                    const subOpen = state.openGroups[subKey] ?? (category === "Combat" && sub === "Infantry");
+                  (() => {
+                    const entries = [...subs.entries()];
+                    const singles = entries.filter(([, items]) => items.length === 1).flatMap(([, items]) => items);
+                    const groups = entries.filter(([, items]) => items.length > 1);
                     return (
-                      <div key={subKey} className="subgroup">
-                        <button type="button" className="subhead minor" onClick={() => dispatch({ type: "toggle-group", key: subKey })}>
-                          <span>{sub}</span>
-                          <span>{subOpen ? "▾" : "▸"}</span>
-                        </button>
-                        {subOpen && <SymbolGrid symbols={items} placingId={placingId} favorites={state.favorites} />}
-                      </div>
+                      <>
+                        {singles.length > 0 && (
+                          <SymbolGrid symbols={singles} placingId={placingId} favorites={state.favorites} />
+                        )}
+                        {groups.map(([sub, items]) => {
+                          if (sub === category) {
+                            return (
+                              <SymbolGrid key={`${catKey}:${sub}`} symbols={items} placingId={placingId} favorites={state.favorites} />
+                            );
+                          }
+                          const subKey = `${catKey}:${sub}`;
+                          const subOpen = state.openGroups[subKey] ?? (category === "Movement and Maneuver" && sub === "Infantry");
+                          return (
+                            <div key={subKey} className="subgroup">
+                              <button type="button" className="subhead minor" onClick={() => dispatch({ type: "toggle-group", key: subKey })}>
+                                <span>{sub}</span>
+                                <span>{subOpen ? "▾" : "▸"}</span>
+                              </button>
+                              {subOpen && <SymbolGrid symbols={items} placingId={placingId} favorites={state.favorites} />}
+                            </div>
+                          );
+                        })}
+                      </>
                     );
-                  })}
+                  })()}
               </div>
             );
           })
@@ -499,12 +512,10 @@ function genericGraphic(layerId: string, kind: Graphic["kind"], name: string, co
     name,
     renderer: "generic",
     kind,
-    codingscheme: "S",
-    battledimension: "G",
-    functionid: "------",
+    basicId: "",
     affiliation: "F",
     status: "P",
-    echelon: "-",
+    echelon: "00",
     headquarters: false,
     taskForce: false,
     color: "#1565c0",
@@ -646,7 +657,7 @@ export function OptionsPanel() {
           <summary>Symbol format</summary>
           <label className="opt-row">
             Size {options.symbolSize}
-            <input type="range" min={16} max={48} value={options.symbolSize} onChange={(event) => set({ symbolSize: Number(event.target.value) })} />
+            <input type="range" min={20} max={72} value={options.symbolSize} onChange={(event) => set({ symbolSize: Number(event.target.value) })} />
           </label>
           <label className="opt-row">
             Line width {options.strokeWidth}
@@ -723,7 +734,7 @@ export function MessageCenter() {
       </header>
       <div className="panel-scroll">
         <p>Plan a mission on the map. Drop MIL-STD-2525 and APP-6 symbols, draw control measures, and keep them on layers.</p>
-        <p>Symbols are drawn by <a href="https://github.com/spatialillusions/milsymbol">milsymbol</a>. The catalogue is <a href="https://github.com/spatialillusions/mil-std-2525">mil-std-2525</a>. Right-click a symbol in the gallery to favorite it.</p>
+        <p>Symbols are the published MIL-STD-2525D plates, drawn by the <a href="https://github.com/missioncommand/mil-sym-ts">US Army mil-sym renderer</a>. Right-click a symbol in the gallery to favorite it.</p>
         <p>Ctrl+Z undo, Ctrl+Y redo, Delete removes the selection, Enter finishes a line or area, Esc cancels placement.</p>
       </div>
     </aside>

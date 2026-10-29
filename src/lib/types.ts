@@ -16,9 +16,8 @@ export type CatalogSymbol = {
   category: string;
   subcategory: string;
   section: Exclude<SectionId, "favorites">;
-  codingscheme: string;
-  battledimension: string;
-  functionid: string;
+  /** Symbol set + entity code, 8 digits, from MIL-STD-2525D. */
+  basicId: string;
   kind: "point" | "line" | "area";
 };
 
@@ -41,9 +40,8 @@ export type Graphic = {
   name: string;
   renderer: "symbol" | "generic";
   kind: DrawKind;
-  codingscheme: string;
-  battledimension: string;
-  functionid: string;
+  /** Symbol set + entity code. Empty for generic drawings. */
+  basicId: string;
   affiliation: Affiliation;
   status: Presence;
   echelon: string;
@@ -126,7 +124,7 @@ export const DEFAULT_OPTIONS: ViewOptions = {
   cursorCoordinate: true,
   showScale: true,
   grid: false,
-  symbolSize: 28,
+  symbolSize: 40,
   symbolFill: true,
   symbolFrame: true,
   shadow: true,
@@ -134,21 +132,21 @@ export const DEFAULT_OPTIONS: ViewOptions = {
 };
 
 export const ECHELONS: { code: string; label: string }[] = [
-  { code: "-", label: "None" },
-  { code: "A", label: "Team / crew" },
-  { code: "B", label: "Squad" },
-  { code: "C", label: "Section" },
-  { code: "D", label: "Platoon / detachment" },
-  { code: "E", label: "Company / battery / troop" },
-  { code: "F", label: "Battalion / squadron" },
-  { code: "G", label: "Regiment / group" },
-  { code: "H", label: "Brigade" },
-  { code: "I", label: "Division" },
-  { code: "J", label: "Corps / MEF" },
-  { code: "K", label: "Army" },
-  { code: "L", label: "Army group / front" },
-  { code: "M", label: "Region / theater" },
-  { code: "N", label: "Command" },
+  { code: "00", label: "None" },
+  { code: "11", label: "Team / crew" },
+  { code: "12", label: "Squad" },
+  { code: "13", label: "Section" },
+  { code: "14", label: "Platoon / detachment" },
+  { code: "15", label: "Company / battery / troop" },
+  { code: "16", label: "Battalion / squadron" },
+  { code: "17", label: "Regiment / group" },
+  { code: "18", label: "Brigade" },
+  { code: "21", label: "Division" },
+  { code: "22", label: "Corps / MEF" },
+  { code: "23", label: "Army" },
+  { code: "24", label: "Army group / front" },
+  { code: "25", label: "Region / theater" },
+  { code: "26", label: "Command" },
 ];
 
 export const AFFILIATIONS: { code: Affiliation; label: string }[] = [

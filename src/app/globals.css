@@ -130,7 +130,8 @@ a { color: #0b57d0; }
 }
 .symbol-cell.on { outline: 2px solid #c62828; outline-offset: 1px; }
 .symbol-cell:hover { filter: brightness(1.05); }
-.thumb-svg svg { width: 40px; height: 36px; display: block; }
+.thumb-svg { display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; }
+.thumb-svg svg { display: block; width: auto; height: 40px; max-width: 100%; }
 .thumb-fallback { font-size: 10px; font-weight: 700; letter-spacing: 0.02em; }
 .symbol-cell .fav { position: absolute; top: 0; right: 2px; color: #7a4b00; font-style: normal; font-size: 10px; }
 

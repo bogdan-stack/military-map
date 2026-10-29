@@ -2,10 +2,7 @@
 
 A browser mission planner. Drop MIL-STD-2525 and APP-6 symbols on a map, edit affiliation and echelon, draw control measures, and keep the overlay on layers.
 
-Symbology comes from two MIT libraries:
-
-- [milsymbol](https://github.com/spatialillusions/milsymbol) draws the symbols
-- [mil-std-2525](https://github.com/spatialillusions/mil-std-2525) supplies the symbol catalogue
+Symbols are the published MIL-STD-2525D / APP-6D plates from the [US Army mil-sym renderer](https://github.com/missioncommand/mil-sym-ts).
 
 ```bash
 npm install

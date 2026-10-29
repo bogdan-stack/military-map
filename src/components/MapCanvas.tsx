@@ -410,13 +410,16 @@ function upsertMarker(
   let offset: [number, number] = [0, 0];
   if (graphic.renderer === "symbol" && graphic.kind === "point") {
     const symbol = renderSymbol(graphic, state.options);
-    const size = symbol.getSize();
-    const symbolAnchor = symbol.getAnchor();
-    element.style.width = `${size.width}px`;
-    element.style.height = `${size.height}px`;
-    element.innerHTML = symbol.asSVG();
+    if (!symbol) {
+      markers.get(graphic.id)?.remove();
+      markers.delete(graphic.id);
+      return;
+    }
+    element.style.width = `${symbol.width}px`;
+    element.style.height = `${symbol.height}px`;
+    element.innerHTML = symbol.svg;
     anchor = "top-left";
-    offset = [-symbolAnchor.x, -symbolAnchor.y];
+    offset = [-symbol.anchorX, -symbol.anchorY];
   } else {
     const text = graphic.modifiers.uniqueDesignation || graphic.name;
     element.innerHTML =

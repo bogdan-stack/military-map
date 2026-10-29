@@ -1,89 +1,89 @@
-import { ms2525c } from "mil-std-2525";
+import { MSLookup, SymbolID } from "@armyc2.c5isr.renderer/mil-sym-ts-web";
 import type { CatalogSymbol } from "./types";
-
-type RawIcon = {
-  hierarchy?: string;
-  names?: string[];
-  codingscheme?: string;
-  battledimension?: string;
-  functionid?: string;
-  name?: string;
-  geometry?: string;
-};
 
 type Section = CatalogSymbol["section"];
 
-function titleCase(value: string) {
-  return value
-    .toLowerCase()
-    .replace(/(^|[\s/(])([a-z])/g, (m) => m.toUpperCase());
+const FORMATIONS = new Set([
+  SymbolID.SymbolSet_Air,
+  SymbolID.SymbolSet_AirMissile,
+  SymbolID.SymbolSet_Space,
+  SymbolID.SymbolSet_SpaceMissile,
+  SymbolID.SymbolSet_LandUnit,
+  SymbolID.SymbolSet_LandCivilianUnit_Organization,
+  SymbolID.SymbolSet_DismountedIndividuals,
+  SymbolID.SymbolSet_SeaSurface,
+  SymbolID.SymbolSet_SeaSubsurface,
+  SymbolID.SymbolSet_CyberSpace,
+]);
+
+function sectionFor(symbolSet: number): Section {
+  if (
+    symbolSet === SymbolID.SymbolSet_LandEquipment ||
+    symbolSet === SymbolID.SymbolSet_LandInstallation ||
+    symbolSet === SymbolID.SymbolSet_MineWarfare
+  ) {
+    return "equipment";
+  }
+  if (symbolSet === SymbolID.SymbolSet_ControlMeasure) return "tactical";
+  if (
+    symbolSet === SymbolID.SymbolSet_SignalsIntelligence ||
+    symbolSet === SymbolID.SymbolSet_SignalsIntelligence_Space ||
+    symbolSet === SymbolID.SymbolSet_SignalsIntelligence_Air ||
+    symbolSet === SymbolID.SymbolSet_SignalsIntelligence_Land ||
+    symbolSet === SymbolID.SymbolSet_SignalsIntelligence_SeaSurface ||
+    symbolSet === SymbolID.SymbolSet_SignalsIntelligence_SeaSubsurface
+  ) {
+    return "signals";
+  }
+  if (symbolSet === SymbolID.SymbolSet_Activities) return "stability";
+  if (
+    symbolSet === SymbolID.SymbolSet_Atmospheric ||
+    symbolSet === SymbolID.SymbolSet_Oceanographic ||
+    symbolSet === SymbolID.SymbolSet_MeteorologicalSpace
+  ) {
+    return "emergency";
+  }
+  if (FORMATIONS.has(symbolSet)) return "formations";
+  return "formations";
 }
 
-function kindOf(geometry: string | undefined): CatalogSymbol["kind"] {
-  const g = (geometry || "").toUpperCase();
-  if (g === "LINE" || g === "MULTIPOINT") return "line";
-  if (g === "POLYGON") return "area";
+function kindOf(geometry: string): CatalogSymbol["kind"] {
+  const value = geometry.toLowerCase();
+  if (value === "line") return "line";
+  if (value === "area") return "area";
   return "point";
-}
-
-function collect(node: unknown, section: Section, out: CatalogSymbol[]) {
-  if (!node || typeof node !== "object") return;
-  const record = node as { mainIcon?: RawIcon[] } & Record<string, unknown>;
-  if (Array.isArray(record.mainIcon)) {
-    for (const row of record.mainIcon) {
-      const functionid = (row.functionid || "").trim();
-      if (!functionid || /^-+$/.test(functionid)) continue;
-      const names = (row.names || []).map((n) => (n || "").trim()).filter(Boolean);
-      const name = titleCase((row.name || functionid).trim());
-      const category = titleCase(names[2] || names[1] || names[0] || section);
-      const subcategory = titleCase(names[3] || names[names.length - 1] || name);
-      const id = (row.hierarchy || `${section}-${functionid}-${out.length}`).trim();
-      out.push({
-        id,
-        name,
-        category,
-        subcategory,
-        section,
-        codingscheme: (row.codingscheme || "S").trim().slice(0, 1) || "S",
-        battledimension: (row.battledimension || "G").trim().slice(0, 1) || "G",
-        functionid: functionid.padEnd(6, "-").slice(0, 6),
-        kind: kindOf(row.geometry),
-      });
-    }
-  }
-  for (const [key, value] of Object.entries(record)) {
-    if (key === "name" || key === "mainIcon" || key === "symbolset" || key === "modifier1" || key === "modifier2") {
-      continue;
-    }
-    if (value && typeof value === "object") collect(value, section, out);
-  }
 }
 
 let cache: CatalogSymbol[] | null = null;
 
-/** Full MIL-STD-2525C catalogue from the `mil-std-2525` dataset. */
+/** Official MIL-STD-2525D Change 1 catalogue from the Army symbol renderer. */
 export function getCatalog(): CatalogSymbol[] {
   if (cache) return cache;
-  const standard = ms2525c as unknown as {
-    WAR: Record<string, unknown>;
-    TACGRP: unknown;
-    SIGINT: unknown;
-    STBOPS: unknown;
-    EMS: unknown;
-  };
+  const lookup = MSLookup.getInstance();
+  const version = SymbolID.Version_2525Dch1;
   const out: CatalogSymbol[] = [];
-  collect(standard.WAR.GRDTRK_UNT, "formations", out);
-  collect(standard.WAR.SOFUNT, "formations", out);
-  collect(standard.WAR.AIRTRK, "formations", out);
-  collect(standard.WAR.SSUF, "formations", out);
-  collect(standard.WAR.SBSUF, "formations", out);
-  collect(standard.WAR.SPC, "formations", out);
-  collect(standard.WAR.GRDTRK_EQT, "equipment", out);
-  collect(standard.WAR.GRDTRK_INS, "equipment", out);
-  collect(standard.TACGRP, "tactical", out);
-  collect(standard.SIGINT, "signals", out);
-  collect(standard.STBOPS, "stability", out);
-  collect(standard.EMS, "emergency", out);
+  for (const basicId of lookup.getIDList(version)) {
+    const info = lookup.getMSLInfo(basicId, version);
+    if (!info) continue;
+    const name = info.getName().trim();
+    if (!name) continue;
+    const parts = info
+      .getPath()
+      .split("/")
+      .map((part) => part.trim())
+      .filter(Boolean);
+    const category = parts[1] || parts[0] || "General";
+    const subcategory = (parts[2] || name).trim();
+    out.push({
+      id: info.getBasicSymbolID(),
+      name,
+      category,
+      subcategory,
+      section: sectionFor(info.getSymbolSet()),
+      basicId: info.getBasicSymbolID(),
+      kind: kindOf(info.getGeometry() || "point"),
+    });
+  }
   cache = out;
   return out;
 }
