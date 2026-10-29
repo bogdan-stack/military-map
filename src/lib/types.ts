@@ -23,6 +23,8 @@ export type CatalogSymbol = {
 
 export type Modifiers = {
   uniqueDesignation: string;
+  /** T1, the designation on the other side of a boundary. */
+  uniqueDesignation2: string;
   higherFormation: string;
   additionalInformation: string;
   staffComments: string;
@@ -107,6 +109,7 @@ export type RightPanel = "gallery" | "editor" | "points" | null;
 
 export const EMPTY_MODIFIERS: Modifiers = {
   uniqueDesignation: "",
+  uniqueDesignation2: "",
   higherFormation: "",
   additionalInformation: "",
   staffComments: "",

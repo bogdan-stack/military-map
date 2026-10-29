@@ -5,7 +5,7 @@ import type { Map } from "maplibre-gl";
 import { getCatalog, groupCatalog } from "@/lib/catalog";
 import { formatDistance, formatLatLng, parseCoordinate, pathLength, ringArea } from "@/lib/geo";
 import { useMapStore } from "@/lib/store";
-import { affiliationColor, canScaleGraphic, FIELD, frameColor, graphicRotation, graphicScale, renderMeasurePreview, renderSymbol, shownCoordinates, symbolAllows, TEXT_MODIFIERS, toBasePoint } from "@/lib/symbols";
+import { affiliationColor, canScaleGraphic, FIELD, frameColor, graphicRotation, graphicScale, isBoundary, renderMeasurePreview, renderSymbol, shownCoordinates, symbolAllows, TEXT_MODIFIERS, toBasePoint } from "@/lib/symbols";
 import {
   AFFILIATIONS,
   ECHELONS,
@@ -510,7 +510,7 @@ export function EditorPanel() {
               </label>
               {(graphic.kind === "bean" || symbolAllows(graphic, state.options.standard, FIELD.echelon)) && (
                 <label className="opt-row">
-                  Unit size
+                  {isBoundary(graphic) ? "B" : "Unit size"}
                   <select
                     value={graphic.echelon}
                     onChange={(event) => dispatch({ type: "patch", id: graphic.id, patch: { echelon: event.target.value } })}
@@ -581,6 +581,13 @@ export function EditorPanel() {
   );
 }
 
+function boundaryFieldLabel(graphic: Graphic, key: string, fallback: string) {
+  if (!isBoundary(graphic)) return fallback;
+  if (key === "uniqueDesignation") return "T";
+  if (key === "uniqueDesignation2") return "T1";
+  return fallback;
+}
+
 function ModifierFields({ graphic }: { graphic: Graphic }) {
   const { state, dispatch } = useMapStore();
   const fields =
@@ -591,7 +598,7 @@ function ModifierFields({ graphic }: { graphic: Graphic }) {
     <>
       {fields.map((field) => (
         <label key={field.key} className="stack-field">
-          {field.label}
+          {boundaryFieldLabel(graphic, field.key, field.label)}
           {field.key === "reinforcedReduced" ? (
             <select
               value={["", "+", "-", "±"].includes(graphic.modifiers.reinforcedReduced) ? graphic.modifiers.reinforcedReduced : ""}

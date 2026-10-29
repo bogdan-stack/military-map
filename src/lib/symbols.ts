@@ -10,6 +10,7 @@ import {
 } from "@armyc2.c5isr.renderer/mil-sym-ts-web";
 import type { Feature, Position } from "geojson";
 import { sectionOfBasicId } from "./catalog";
+import { beanModifier } from "./geo";
 import { EMPTY_MODIFIERS, type Affiliation, type Graphic, type Modifiers as ModifierText, type Placing, type Presence, type ViewOptions } from "./types";
 
 export type DrawnSymbol = {
@@ -161,6 +162,7 @@ function modifierMap(graphic: Graphic, sidc: string) {
   const map = new Map<string, string>();
   const fields: [string, string][] = [
     [Modifiers.T_UNIQUE_DESIGNATION_1, graphic.modifiers.uniqueDesignation],
+    [Modifiers.T1_UNIQUE_DESIGNATION_2, graphic.modifiers.uniqueDesignation2],
     [Modifiers.M_HIGHER_FORMATION, graphic.modifiers.higherFormation],
     [Modifiers.H_ADDITIONAL_INFO_1, graphic.modifiers.additionalInformation],
     [Modifiers.G_STAFF_COMMENTS, graphic.modifiers.staffComments],
@@ -178,6 +180,34 @@ function modifierMap(graphic: Graphic, sidc: string) {
     if (text && SymbolUtilities.hasModifier(sidc, key)) map.set(key, text);
   }
   return map;
+}
+
+/** Unique designation stays on the left and higher formation on the right, sharing one baseline. */
+function alignFlankingText(svg: string, designation: string, formation: string) {
+  const left = designation.trim();
+  const right = formation.trim();
+  if (!left || !right || typeof DOMParser === "undefined") return svg;
+  const doc = new DOMParser().parseFromString(svg, "image/svg+xml");
+  const nodes = [...doc.querySelectorAll("text")].filter((node) => {
+    const text = (node.textContent || "").trim();
+    return text === left || text === right;
+  });
+  const rows = nodes
+    .map((node) => Number(node.getAttribute("y")))
+    .filter((value) => Number.isFinite(value));
+  if (rows.length < 2) return svg;
+  const lowest = Math.max(...rows);
+  const flank = nodes.filter((node) => {
+    const y = Number(node.getAttribute("y"));
+    return Number.isFinite(y) && lowest - y < 18;
+  });
+  const ys = flank.map((node) => Number(node.getAttribute("y")));
+  const xs = flank.map((node) => Number(node.getAttribute("x"))).filter((value) => Number.isFinite(value));
+  if (new Set(ys.map((value) => Math.round(value))).size < 2) return svg;
+  if (Math.max(...xs) - Math.min(...xs) < 8) return svg;
+  const line = String(Math.min(...ys));
+  for (const node of flank) node.setAttribute("y", line);
+  return new XMLSerializer().serializeToString(doc);
 }
 
 function presentSymbol(svg: string, view: ViewOptions, width = 0, height = 0) {
@@ -227,7 +257,11 @@ export function renderSymbol(
   }
   const bounds = drawn.getImageBounds();
   const result: DrawnSymbol = {
-    svg: presentSymbol(drawn.getSVG(), view, Math.max(1, bounds.getWidth()), Math.max(1, bounds.getHeight())),
+    svg: alignFlankingText(
+      presentSymbol(drawn.getSVG(), view, Math.max(1, bounds.getWidth()), Math.max(1, bounds.getHeight())),
+      graphic.modifiers.uniqueDesignation,
+      graphic.modifiers.higherFormation,
+    ),
     width: Math.max(1, bounds.getWidth()),
     height: Math.max(1, bounds.getHeight()),
     anchorX: drawn.getSymbolCenterX(),
@@ -252,6 +286,7 @@ export const FIELD = {
 
 export const TEXT_MODIFIERS: { key: keyof ModifierText; label: string; modifier: string }[] = [
   { key: "uniqueDesignation", label: "Unique designation", modifier: Modifiers.T_UNIQUE_DESIGNATION_1 },
+  { key: "uniqueDesignation2", label: "Unique designation 2", modifier: Modifiers.T1_UNIQUE_DESIGNATION_2 },
   { key: "higherFormation", label: "Higher formation", modifier: Modifiers.M_HIGHER_FORMATION },
   { key: "additionalInformation", label: "Additional information", modifier: Modifiers.H_ADDITIONAL_INFO_1 },
   { key: "staffComments", label: "Staff comments", modifier: Modifiers.G_STAFF_COMMENTS },
@@ -374,6 +409,11 @@ export function rotationHandlePosition(graphic: Graphic): [number, number] {
   return rotateAround(origin, north, -(canScaleGraphic(graphic) ? graphicRotation(graphic) : 0));
 }
 
+/** The command-and-control boundary, whose echelon sits in a gap in the line. */
+export function isBoundary(graphic: { basicId?: string }) {
+  return (graphic.basicId || "").replace(/\D/g, "").padEnd(8, "0").slice(0, 8) === "25110100";
+}
+
 /** Official frame colors: the same cyan, red, green, and yellow as unit symbols. */
 export function frameColor(code: string) {
   if (code === "H") return "#FF8080";
@@ -389,7 +429,7 @@ function paintAffiliation(features: Feature[], affiliation: string): Feature[] {
     properties: {
       ...(feature.properties || {}),
       strokeColor: color,
-      fontColor: "#111111",
+      fontColor: "#000000",
       ...(feature.properties?.fillColor ? { fillColor: color } : {}),
     },
   }));
@@ -400,7 +440,7 @@ export function renderControlMeasure(graphic: Graphic, view: ViewOptions, frame:
   const shown = { ...graphic, coordinates: shownCoordinates(graphic) };
   const features = renderMeasureFeatures(shown, view, frame) ?? renderMeasureFeatures(shown, view, frameAround(shown.coordinates, frame));
   if (!features?.length) return null;
-  return paintAffiliation(features, graphic.affiliation).map((feature) => {
+  const painted = paintAffiliation(features, graphic.affiliation).map((feature) => {
     const dash = feature.properties?.strokeDasharray;
     return {
       ...feature,
@@ -413,6 +453,7 @@ export function renderControlMeasure(graphic: Graphic, view: ViewOptions, frame:
       },
     };
   });
+  return styleBoundary(attachLabelRotation(painted), graphic, frame);
 }
 
 /** The renderer drops a symbol when the view spans most of the world. Draw it at the map scale inside a frame around the graphic. */
@@ -481,12 +522,11 @@ export function renderMeasurePreview(graphic: Graphic, view: ViewOptions): strin
   const key = [sidc, coordinates.join(";"), modifiers.distance, modifiers.azimuth, JSON.stringify(graphic.modifiers)].join("|");
   const cached = previewCache.get(key);
   if (cached !== undefined) return cached;
-  const features = renderMeasureFeatures(
-    { ...graphic, id: "preview", coordinates, modifiers },
-    view,
-    { west: 0, south: 0, east: 10, north: 6, width: 220, height: 140 },
-  );
-  const svg = features ? featuresToSvg(paintAffiliation(features, graphic.affiliation)) : null;
+  const frame = { west: 0, south: 0, east: 10, north: 6, width: 220, height: 140 };
+  const features = renderMeasureFeatures({ ...graphic, id: "preview", coordinates, modifiers }, view, frame);
+  const svg = features
+    ? featuresToSvg(styleBoundary(attachLabelRotation(paintAffiliation(features, graphic.affiliation)), graphic, frame))
+    : null;
   previewCache.set(key, svg);
   return svg;
 }
@@ -523,6 +563,133 @@ function renderMeasureFeatures(graphic: Graphic, view: ViewOptions, frame: MapFr
   if (parsed.type === "error" || !parsed.features) return null;
   const features = parsed.features.filter(usableMeasure);
   return features.length ? features : null;
+}
+
+function attachLabelRotation(features: Feature[]): Feature[] {
+  return features.map((feature) => {
+    if (feature.geometry?.type !== "Point") return feature;
+    const rotation = Number(feature.properties?.rotation);
+    if (!Number.isFinite(rotation)) return feature;
+    return { ...feature, properties: { ...(feature.properties || {}), textRotate: rotation } };
+  });
+}
+
+/** Opens the boundary around its echelon and draws B, T, and T1 in black with a white outline. */
+function styleBoundary(features: Feature[], graphic: Graphic, frame: MapFrame): Feature[] {
+  if (!isBoundary(graphic)) return features;
+  const mark = beanModifier(graphic.echelon);
+  const above = String(graphic.modifiers.uniqueDesignation || "").trim();
+  const below = String(graphic.modifiers.uniqueDesignation2 || "").trim();
+  const lines = features.filter((feature) => feature.geometry?.type !== "Point");
+  const host = lines.find((feature) => lineParts(feature.geometry).length);
+  const opened = host ? openBoundaryLine(lineParts(host.geometry), mark, frame) : null;
+  if (!host || !opened) {
+    return features.map((feature) =>
+      feature.geometry?.type === "Point"
+        ? { ...feature, properties: { ...(feature.properties || {}), fontColor: "#000000" } }
+        : feature,
+    );
+  }
+  const gapped = lines.map((feature) =>
+    feature === host ? { ...feature, geometry: { type: "MultiLineString" as const, coordinates: opened.parts } } : feature,
+  );
+  const base = { ...(host.properties || {}) };
+  const labels = [
+    mark ? boundaryText(base, mark, opened.center, opened.angle, 16) : null,
+    above ? boundaryText(base, above, opened.above, opened.angle, 14) : null,
+    below ? boundaryText(base, below, opened.below, opened.angle, 14) : null,
+  ].filter((feature): feature is Feature => Boolean(feature));
+  return [...gapped, ...labels];
+}
+
+function boundaryText(base: Feature["properties"], label: string, at: Position, angle: number, size: number): Feature {
+  return {
+    type: "Feature",
+    properties: { ...(base || {}), label, fontColor: "#000000", textSize: size, textRotate: angle },
+    geometry: { type: "Point", coordinates: at },
+  };
+}
+
+function lineParts(geometry: Feature["geometry"]): Position[][] {
+  if (!geometry) return [];
+  if (geometry.type === "LineString") return [geometry.coordinates as Position[]];
+  if (geometry.type === "MultiLineString") return geometry.coordinates as Position[][];
+  return [];
+}
+
+function openBoundaryLine(parts: Position[][], mark: string, frame: MapFrame) {
+  let partIndex = 0;
+  parts.forEach((coords, index) => {
+    if (coords.length > parts[partIndex].length) partIndex = index;
+  });
+  const coords = parts[partIndex];
+  const seg = longestMiddleSegment(coords, frame);
+  if (!coords || seg < 0 || seg >= coords.length - 1) return null;
+  const a = coords[seg];
+  const b = coords[seg + 1];
+  const degX = (frame.east - frame.west) / Math.max(frame.width, 1) || 1e-9;
+  const degY = (frame.north - frame.south) / Math.max(frame.height, 1) || 1e-9;
+  const dx = (b[0] - a[0]) / degX;
+  const dy = (a[1] - b[1]) / degY;
+  const segPx = Math.hypot(dx, dy);
+  if (segPx < 8) return null;
+  const gapPx = mark ? Math.min(Math.max(28, mark.length * 14), segPx * 0.72) : 0;
+  const center = pointAlong(a, b, 0.5);
+  let next = parts;
+  if (gapPx >= 10) {
+    const start = pointAlong(a, b, 0.5 - gapPx / 2 / segPx);
+    const end = pointAlong(a, b, 0.5 + gapPx / 2 / segPx);
+    const left = [...coords.slice(0, seg + 1), start];
+    const right = [end, ...coords.slice(seg + 1)];
+    next = parts.flatMap((line, index) => (index === partIndex ? [left, right] : [line])).filter((line) => line.length >= 2);
+  }
+  let dirX = dx;
+  let dirY = dy;
+  if (dirX < 0 || (dirX === 0 && dirY > 0)) {
+    dirX = -dirX;
+    dirY = -dirY;
+  }
+  const angle = (Math.atan2(dirY, dirX) * 180) / Math.PI;
+  const len = Math.hypot(dirX, dirY) || 1;
+  const aboveX = dirY / len;
+  const aboveY = -dirX / len;
+  const shift = (px: number, py: number): Position => [center[0] + px * degX, center[1] - py * degY];
+  return {
+    parts: next,
+    center,
+    angle,
+    above: shift(aboveX * 18, aboveY * 18),
+    below: shift(-aboveX * 16, -aboveY * 16),
+  };
+}
+
+function longestMiddleSegment(coords: Position[] | undefined, frame: MapFrame) {
+  if (!coords || coords.length < 2) return -1;
+  const lengths = coords.slice(1).map((point, index) => segmentPixels(coords[index], point, frame));
+  const total = lengths.reduce((sum, length) => sum + length, 0);
+  let covered = 0;
+  let best = -1;
+  let bestDist = Infinity;
+  lengths.forEach((length, index) => {
+    const middle = covered + length / 2;
+    const dist = Math.abs(middle - total / 2);
+    if (length >= 8 && dist < bestDist) {
+      best = index;
+      bestDist = dist;
+    }
+    covered += length;
+  });
+  return best;
+}
+
+function segmentPixels(a: Position, b: Position, frame: MapFrame) {
+  const degX = (frame.east - frame.west) / Math.max(frame.width, 1) || 1e-9;
+  const degY = (frame.north - frame.south) / Math.max(frame.height, 1) || 1e-9;
+  return Math.hypot((b[0] - a[0]) / degX, (a[1] - b[1]) / degY);
+}
+
+function pointAlong(a: Position, b: Position, t: number): Position {
+  return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
 }
 
 function usableMeasure(feature: Feature) {
@@ -562,8 +729,13 @@ function featuresToSvg(features: Feature[]) {
       parts.push(`<path d="${path}${close}" fill="${fill}" stroke="${stroke}" stroke-width="2.6" stroke-linejoin="round"/>`);
     }
     if (geometry.type === "Point" && feature.properties?.label) {
+      const [x, y] = project(geometry.coordinates).split(" ");
+      const fill = String(feature.properties.fontColor || stroke);
+      const size = Number(feature.properties.textSize) || 12;
+      const rotate = Number(feature.properties.textRotate) || 0;
+      const turn = rotate ? ` transform="rotate(${rotate.toFixed(1)} ${x} ${y})"` : "";
       parts.push(
-        `<text x="${project(geometry.coordinates).split(" ")[0]}" y="${project(geometry.coordinates).split(" ")[1]}" text-anchor="middle" font-size="12" font-family="sans-serif" fill="#111111">${escapeXml(String(feature.properties.label))}</text>`,
+        `<text x="${x}" y="${y}" text-anchor="middle" dominant-baseline="middle" font-size="${size}" font-family="sans-serif" font-weight="700" fill="${fill}" stroke="#ffffff" stroke-width="1.4" paint-order="stroke"${turn}>${escapeXml(String(feature.properties.label))}</text>`,
       );
     }
   }

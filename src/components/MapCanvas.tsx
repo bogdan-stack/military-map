@@ -540,17 +540,30 @@ function ensureLayers(map: Map) {
       filter: ["all", ["==", ["geometry-type"], "Point"], ["has", "label"], [">", ["length", ["get", "label"]], 0]],
       layout: {
         "text-field": ["get", "label"],
-        "text-size": 13,
-        "text-font": ["Noto Sans Regular"],
+        "text-size": ["coalesce", ["to-number", ["get", "textSize"]], 13],
+        "text-font": ["Noto Sans Bold"],
         "text-anchor": "center",
+        "text-rotate": ["coalesce", ["to-number", ["get", "textRotate"]], 0],
+        "text-rotation-alignment": "viewport",
+        "text-allow-overlap": true,
+        "text-ignore-placement": true,
       },
       paint: {
-        "text-color": ["coalesce", ["get", "fontColor"], "#111111"],
+        "text-color": ["coalesce", ["get", "fontColor"], "#000000"],
         "text-halo-color": "#ffffff",
-        "text-halo-width": 1.4,
+        "text-halo-width": 1.25,
       },
     });
   }
+  map.setLayoutProperty("measures-label", "text-font", ["Noto Sans Bold"]);
+  map.setLayoutProperty("measures-label", "text-size", ["coalesce", ["to-number", ["get", "textSize"]], 13]);
+  map.setPaintProperty("measures-label", "text-color", ["coalesce", ["get", "fontColor"], "#000000"]);
+  map.setPaintProperty("measures-label", "text-halo-color", "#ffffff");
+  map.setPaintProperty("measures-label", "text-halo-width", 1.25);
+  map.setLayoutProperty("measures-label", "text-rotate", ["coalesce", ["to-number", ["get", "textRotate"]], 0]);
+  map.setLayoutProperty("measures-label", "text-rotation-alignment", "viewport");
+  map.setLayoutProperty("measures-label", "text-allow-overlap", true);
+  map.setLayoutProperty("measures-label", "text-ignore-placement", true);
   if (!map.getLayer("draft-line")) {
     map.addLayer({
       id: "draft-line",
