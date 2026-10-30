@@ -5,9 +5,9 @@ import { useMapStore } from "@/lib/store";
 
 const LABELS = {
   saved: "Saved",
-  saving: "Saving",
+  saving: "Saving…",
   offline: "Offline",
-  conflict: "Conflict",
+  conflict: "Saved copy differs",
   error: "Not saved",
 } as const;
 
@@ -17,6 +17,7 @@ export function AccountBar() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [notice, setNotice] = useState("");
+  const [noticeOk, setNoticeOk] = useState(false);
   const [busy, setBusy] = useState(false);
 
   if (!persistence.configured && persistence.status === "saved") {
@@ -30,6 +31,7 @@ export function AccountBar() {
   async function submit(mode: "in" | "up") {
     setBusy(true);
     setNotice("");
+    setNoticeOk(false);
     if (mode === "in") {
       const error = await persistence.signIn(email, password);
       setNotice(error ?? "");
@@ -54,12 +56,14 @@ export function AccountBar() {
           </button>
           <button
             type="button"
+            aria-label="Copy this computer's map to your account"
             onClick={async () => {
               const error = await persistence.uploadLocal();
-              setNotice(error ?? "Imported the map saved in this browser.");
+              setNoticeOk(!error);
+              setNotice(error ?? "Copied this computer's map to your account.");
             }}
           >
-            Import from this browser
+            {persistence.status === "conflict" ? "Use this computer" : "Copy to account"}
           </button>
         </>
       ) : (
@@ -70,8 +74,17 @@ export function AccountBar() {
       {persistence.offerUpload && (
         <span className="account-offer">
           Upload this browser&apos;s map to your account?
-          <button type="button" onClick={() => void persistence.uploadLocal().then((error) => setNotice(error ?? ""))}>
-            Upload
+          <button
+            type="button"
+            aria-label="Copy this computer's map to your account"
+            onClick={() =>
+              void persistence.uploadLocal().then((error) => {
+                setNoticeOk(!error);
+                setNotice(error ?? "Copied this computer's map to your account.");
+              })
+            }
+          >
+            Copy to account
           </button>
           <button type="button" onClick={persistence.dismissUpload}>
             Not now
@@ -80,7 +93,7 @@ export function AccountBar() {
       )}
       {persistence.status === "conflict" && (
         <button type="button" onClick={() => void persistence.reloadRemote()}>
-          Reload saved map
+          Use saved map
         </button>
       )}
       {open && !persistence.email && (
@@ -117,7 +130,7 @@ export function AccountBar() {
           </button>
         </form>
       )}
-      {notice && <span className="account-notice">{notice}</span>}
+      {notice && <span className={`account-notice${noticeOk ? " ok" : ""}`}>{notice}</span>}
     </div>
   );
 }

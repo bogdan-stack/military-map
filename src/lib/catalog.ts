@@ -1,4 +1,4 @@
-import { MSLookup, SymbolID } from "@armyc2.c5isr.renderer/mil-sym-ts-web";
+import { DrawRules, MSLookup, SymbolID } from "@armyc2.c5isr.renderer/mil-sym-ts-web";
 import type { CatalogSymbol } from "./types";
 
 type Section = CatalogSymbol["section"];
@@ -51,10 +51,10 @@ function sectionFor(symbolSet: number): Section {
   return "formations";
 }
 
-function kindOf(geometry: string): CatalogSymbol["kind"] {
+function kindOf(geometry: string, minPoints: number, maxPoints: number): CatalogSymbol["kind"] {
   const value = geometry.toLowerCase();
-  if (value === "line") return "line";
-  if (value === "area") return "area";
+  if (value === "area" || (maxPoints > 1 && minPoints >= 3)) return "area";
+  if (value === "line" || (maxPoints > 1 && minPoints >= 2)) return "line";
   return "point";
 }
 
@@ -68,7 +68,7 @@ export function getCatalog(): CatalogSymbol[] {
   const out: CatalogSymbol[] = [];
   for (const basicId of lookup.getIDList(version)) {
     const info = lookup.getMSLInfo(basicId, version);
-    if (!info) continue;
+    if (!info || info.getDrawRule() === DrawRules.DONOTDRAW) continue;
     const name = info.getName().trim();
     if (!name) continue;
     const parts = info
@@ -85,7 +85,7 @@ export function getCatalog(): CatalogSymbol[] {
       subcategory,
       section: sectionFor(info.getSymbolSet()),
       basicId: info.getBasicSymbolID(),
-      kind: kindOf(info.getGeometry() || "point"),
+      kind: kindOf(info.getGeometry() || "point", Number(info.getMinPointCount()) || 0, Number(info.getMaxPointCount()) || 0),
     });
   }
   cache = out;

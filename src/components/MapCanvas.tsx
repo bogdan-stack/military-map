@@ -6,7 +6,7 @@ import type { FeatureCollection } from "geojson";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { beanBack, beanModifier, beanPolygon, circlePolygon, rectPolygon } from "@/lib/geo";
 import { useMapStore } from "@/lib/store";
-import { affiliationColor, bearingFromNorth, canScaleGraphic, centroid, defaultModifiers, frameColor, graphicRotation, graphicScale, placingIsMulti, renderControlMeasure, renderSymbol, rotationHandlePosition, shownCoordinates, symbolContract, toBasePoint, type MapFrame } from "@/lib/symbols";
+import { affiliationColor, bearingFromNorth, canScaleGraphic, centroid, coalescedNumber, defaultModifiers, dropNullProperties, frameColor, graphicRotation, graphicScale, placingIsMulti, renderControlMeasure, renderSymbol, rotationHandlePosition, shownCoordinates, symbolContract, toBasePoint, type MapFrame } from "@/lib/symbols";
 import type { Graphic } from "@/lib/types";
 import { syncMcooHatch, type McooHatchView } from "@/lib/mcoo/layer";
 
@@ -81,7 +81,7 @@ function draftStroke(state: { placing: ReturnType<typeof useMapStore>["state"]["
 }
 
 const GRAPHIC_LINE_COLOR: ExpressionSpecification = ["case", ["==", ["get", "selected"], 1], "#e65100", ["get", "color"]];
-const GRAPHIC_LINE_WIDTH: ExpressionSpecification = ["case", ["==", ["get", "selected"], 1], 3.5, ["coalesce", ["get", "lineWidth"], 2]];
+const GRAPHIC_LINE_WIDTH: ExpressionSpecification = ["case", ["==", ["get", "selected"], 1], 3.5, coalescedNumber("lineWidth", 2)];
 
 export function MapCanvas({ mapRef, mcoo }: { mapRef: MutableRefObject<Map | null>; mcoo: McooHatchView }) {
   const hostRef = useRef<HTMLDivElement>(null);
@@ -344,6 +344,16 @@ function tint(map: Map) {
       if (layer.type === "fill" && /landcover|park|grass|wood|sand/.test(id)) {
         map.setPaintProperty(layer.id, "fill-color", "#e7f3e4");
       }
+      if (layer.type === "fill-extrusion") {
+        const height = map.getPaintProperty(layer.id, "fill-extrusion-height");
+        const base = map.getPaintProperty(layer.id, "fill-extrusion-base");
+        if (JSON.stringify(height) === JSON.stringify(["get", "render_height"])) {
+          map.setPaintProperty(layer.id, "fill-extrusion-height", coalescedNumber("render_height", 0));
+        }
+        if (JSON.stringify(base) === JSON.stringify(["get", "render_min_height"])) {
+          map.setPaintProperty(layer.id, "fill-extrusion-base", coalescedNumber("render_min_height", 0));
+        }
+      }
     } catch {
       /* some layers reject a color override */
     }
@@ -540,10 +550,10 @@ function ensureLayers(map: Map) {
       filter: ["all", ["==", ["geometry-type"], "Point"], ["has", "label"], [">", ["length", ["get", "label"]], 0]],
       layout: {
         "text-field": ["get", "label"],
-        "text-size": ["coalesce", ["to-number", ["get", "textSize"]], 13],
+        "text-size": coalescedNumber("textSize", 13),
         "text-font": ["Noto Sans Bold"],
         "text-anchor": "center",
-        "text-rotate": ["coalesce", ["to-number", ["get", "textRotate"]], 0],
+        "text-rotate": coalescedNumber("textRotate", 0),
         "text-rotation-alignment": "viewport",
         "text-allow-overlap": true,
         "text-ignore-placement": true,
@@ -556,11 +566,11 @@ function ensureLayers(map: Map) {
     });
   }
   map.setLayoutProperty("measures-label", "text-font", ["Noto Sans Bold"]);
-  map.setLayoutProperty("measures-label", "text-size", ["coalesce", ["to-number", ["get", "textSize"]], 13]);
+  map.setLayoutProperty("measures-label", "text-size", coalescedNumber("textSize", 13));
   map.setPaintProperty("measures-label", "text-color", ["coalesce", ["get", "fontColor"], "#000000"]);
   map.setPaintProperty("measures-label", "text-halo-color", "#ffffff");
   map.setPaintProperty("measures-label", "text-halo-width", 1.25);
-  map.setLayoutProperty("measures-label", "text-rotate", ["coalesce", ["to-number", ["get", "textRotate"]], 0]);
+  map.setLayoutProperty("measures-label", "text-rotate", coalescedNumber("textRotate", 0));
   map.setLayoutProperty("measures-label", "text-rotation-alignment", "viewport");
   map.setLayoutProperty("measures-label", "text-allow-overlap", true);
   map.setLayoutProperty("measures-label", "text-ignore-placement", true);
@@ -584,7 +594,13 @@ function ensureLayers(map: Map) {
 
 function setData(map: Map, id: string, data: FeatureCollection) {
   const source = map.getSource(id) as GeoJSONSource | undefined;
-  source?.setData(data);
+  source?.setData({
+    type: "FeatureCollection",
+    features: data.features.map((feature) => ({
+      ...feature,
+      properties: dropNullProperties(feature.properties),
+    })),
+  });
 }
 
 function draw(

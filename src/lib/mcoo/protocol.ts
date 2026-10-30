@@ -1,5 +1,5 @@
 import maplibregl, { type AddProtocolAction } from "maplibre-gl";
-import { renderHatchTile } from "./render-tile";
+import { canvasToPng, renderHatchTile } from "./render-tile";
 import type { GroundCondition, MovementClass } from "./classify";
 
 const cache = new Map<string, ArrayBuffer>();
@@ -58,11 +58,7 @@ function cachedTile(
 let blankTile: Promise<ArrayBuffer> | null = null;
 
 function blank(): Promise<ArrayBuffer> {
-  blankTile ??= (async () => {
-    const canvas = new OffscreenCanvas(1, 1);
-    const blob = await canvas.convertToBlob({ type: "image/png" });
-    return blob.arrayBuffer();
-  })();
+  blankTile ??= canvasToPng(new OffscreenCanvas(1, 1));
   return blankTile;
 }
 

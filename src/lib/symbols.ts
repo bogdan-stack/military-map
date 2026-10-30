@@ -63,22 +63,37 @@ function amplifierDefaults(drawRule: number) {
   return { distance: "", azimuth: "" };
 }
 
+/**
+ * Version code whose lookup table actually contains this entity.
+ * APP-6(D) and MIL-STD-2525D share version code 10, and the renderer searches the
+ * APP-6 table for that code. Symbols that exist only in 2525D Change 1 (code 11)
+ * must be tagged 11 or the lookup returns undefined.
+ */
+function symbolVersion(basicId: string, standard: ViewOptions["standard"]) {
+  const id = (basicId || "").padEnd(8, "0").slice(0, 8);
+  const preferred = standard === "APP6" ? SymbolID.Version_APP6D : SymbolID.Version_2525Dch1;
+  const lookup = MSLookup.getInstance();
+  if (lookup.getMSLInfo(id, preferred)) return preferred;
+  for (const version of [SymbolID.Version_2525Dch1, SymbolID.Version_2525E, SymbolID.Version_2525Ech1]) {
+    if (version !== preferred && lookup.getMSLInfo(id, version)) return version;
+  }
+  return preferred;
+}
+
 /** Anchor count and allowed amplifiers for one symbol, from the MIL-STD lookup. */
 export function symbolContract(basicId: string, standard: ViewOptions["standard"]): SymbolContract {
   const id = (basicId || "").padEnd(8, "0").slice(0, 8);
   const key = `${standard}:${id}`;
   const cached = contractCache.get(key);
   if (cached) return cached;
-  const version = standard === "APP6" ? SymbolID.Version_APP6D : SymbolID.Version_2525Dch1;
-  const lookup = MSLookup.getInstance();
-  let info = lookup.getMSLInfo(id, version);
-  if (!info && version !== SymbolID.Version_2525Dch1) info = lookup.getMSLInfo(id, SymbolID.Version_2525Dch1);
+  const info = MSLookup.getInstance().getMSLInfo(id, symbolVersion(id, standard));
   const geometry = String(info?.getGeometry() || "point").toLowerCase();
   const minPoints = Math.max(1, Number(info?.getMinPointCount()) || 1);
   const rawMax = Number(info?.getMaxPointCount());
   const maxPoints = Number.isFinite(rawMax) && rawMax <= HUGE_POINT_COUNT ? Math.max(minPoints, rawMax) : null;
+  const multipoint = Number.isFinite(rawMax) && rawMax > 1;
   let mode: DrawMode = "open";
-  if (geometry === "point" || (minPoints <= 1 && (maxPoints == null || maxPoints <= 1))) mode = "point";
+  if (!multipoint && (geometry === "point" || minPoints <= 1)) mode = "point";
   else if (maxPoints != null && minPoints === maxPoints) mode = "fixed";
   const modifiers = info?.getModifiers() ?? [];
   const defaults = amplifierDefaults(Number(info?.getDrawRule()) || 0);
@@ -140,7 +155,7 @@ function headquartersCode(graphic: Pick<Graphic, "headquarters" | "taskForce" | 
 export function buildSidc(graphic: Pick<Graphic, "basicId" | "affiliation" | "status" | "echelon" | "headquarters" | "taskForce" | "feint">, standard: ViewOptions["standard"]) {
   const basicId = (graphic.basicId || "").padEnd(8, "0").slice(0, 8);
   let sidc = BLANK;
-  sidc = SymbolID.setVersion(sidc, standard === "APP6" ? SymbolID.Version_APP6D : SymbolID.Version_2525Dch1);
+  sidc = SymbolID.setVersion(sidc, symbolVersion(basicId, standard));
   sidc = SymbolID.setAffiliation(sidc, AFFILIATION[graphic.affiliation] ?? AFFILIATION.F);
   sidc = SymbolID.setSymbolSet(sidc, Number(basicId.slice(0, 2)) || 0);
   sidc = SymbolID.setStatus(sidc, STATUS[graphic.status] ?? STATUS.P);
@@ -230,6 +245,80 @@ function presentSymbol(svg: string, view: ViewOptions, width = 0, height = 0) {
 }
 
 const cache = new Map<string, DrawnSymbol | null>();
+const warnedSidcs = new Set<string>();
+/** Official unknown symbol: an inverted question mark. */
+const UNKNOWN_SIDC = "110098000010000000000000000000";
+
+function warnSidc(sidc: string, reason: string) {
+  if (warnedSidcs.has(sidc)) return;
+  warnedSidcs.add(sidc);
+  console.warn(`Symbol ${sidc}: ${reason}`);
+}
+
+/** A numeric style read that stays a number when the feature property is missing or null. */
+export function coalescedNumber(field: string, fallback: number) {
+  return ["coalesce", ["get", field], fallback] as ["coalesce", ["get", string], number];
+}
+
+export function dropNullProperties<T extends Record<string, unknown> | null | undefined>(properties: T): T {
+  if (!properties) return properties;
+  const next: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(properties)) {
+    if (value !== null && value !== undefined) next[key] = value;
+  }
+  return next as T;
+}
+
+function drawnFromSvg(
+  svg: string,
+  view: ViewOptions,
+  width: number,
+  height: number,
+  anchorX: number,
+  anchorY: number,
+  graphic: Graphic,
+): DrawnSymbol {
+  return {
+    svg: alignFlankingText(presentSymbol(svg, view, width, height), graphic.modifiers.uniqueDesignation, graphic.modifiers.higherFormation),
+    width,
+    height,
+    anchorX,
+    anchorY,
+  };
+}
+
+function renderFallback(graphic: Graphic, view: ViewOptions, size: number): DrawnSymbol {
+  const pixel = Math.max(16, Math.round(size));
+  try {
+    const attributes = new Map<string, string>();
+    attributes.set(MilStdAttributes.PixelSize, String(pixel));
+    attributes.set(MilStdAttributes.KeepUnitRatio, "true");
+    const drawn = MilStdIconRenderer.getInstance().RenderSVG(UNKNOWN_SIDC, new Map(), attributes);
+    if (drawn) {
+      const bounds = drawn.getImageBounds();
+      return drawnFromSvg(
+        drawn.getSVG(),
+        view,
+        Math.max(1, bounds.getWidth()),
+        Math.max(1, bounds.getHeight()),
+        drawn.getSymbolCenterX(),
+        drawn.getSymbolCenterY(),
+        graphic,
+      );
+    }
+  } catch {
+    /* The unknown symbol itself failed. A plain mark still keeps the page up. */
+  }
+  return drawnFromSvg(
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${pixel} ${pixel}"><text x="50%" y="54%" text-anchor="middle" font-size="${Math.round(pixel * 0.7)}">?</text></svg>`,
+    view,
+    pixel,
+    pixel,
+    pixel / 2,
+    pixel / 2,
+    graphic,
+  );
+}
 
 export function renderSymbol(
   graphic: Graphic,
@@ -243,32 +332,51 @@ export function renderSymbol(
   const cached = cache.get(key);
   if (cached !== undefined) return cached;
 
-  const attributes = new Map<string, string>();
-  const pixel = Math.max(16, Math.round(size * (canScaleGraphic(graphic) ? graphicScale(graphic) : 1)));
-  attributes.set(MilStdAttributes.PixelSize, String(pixel));
-  attributes.set(MilStdAttributes.KeepUnitRatio, "true");
-  if (iconOnly) attributes.set(MilStdAttributes.DrawAsIcon, "true");
-  if (view.shadow) attributes.set(MilStdAttributes.OutlineSymbol, "true");
-
-  const drawn = MilStdIconRenderer.getInstance().RenderSVG(sidc, iconOnly ? new Map() : modifierMap(graphic, sidc), attributes);
-  if (!drawn) {
-    cache.set(key, null);
-    return null;
-  }
-  const bounds = drawn.getImageBounds();
-  const result: DrawnSymbol = {
-    svg: alignFlankingText(
-      presentSymbol(drawn.getSVG(), view, Math.max(1, bounds.getWidth()), Math.max(1, bounds.getHeight())),
-      graphic.modifiers.uniqueDesignation,
-      graphic.modifiers.higherFormation,
-    ),
-    width: Math.max(1, bounds.getWidth()),
-    height: Math.max(1, bounds.getHeight()),
-    anchorX: drawn.getSymbolCenterX(),
-    anchorY: drawn.getSymbolCenterY(),
+  const finish = (result: DrawnSymbol | null) => {
+    cache.set(key, result);
+    return result;
   };
-  cache.set(key, result);
-  return result;
+
+  try {
+    if (symbolContract(graphic.basicId, view.standard).mode !== "point" || SymbolUtilities.isMultiPoint(sidc)) return finish(null);
+    const info = MSLookup.getInstance().getMSLInfo(sidc);
+    if (!info) {
+      warnSidc(sidc, "unknown symbol");
+      return finish(renderFallback(graphic, view, size));
+    }
+    if (info.getDrawRule() === DrawRules.DONOTDRAW) {
+      warnSidc(sidc, `${info.getName()} is not a drawable symbol`);
+      return finish(renderFallback(graphic, view, size));
+    }
+
+    const attributes = new Map<string, string>();
+    const pixel = Math.max(16, Math.round(size * (canScaleGraphic(graphic) ? graphicScale(graphic) : 1)));
+    attributes.set(MilStdAttributes.PixelSize, String(pixel));
+    attributes.set(MilStdAttributes.KeepUnitRatio, "true");
+    if (iconOnly) attributes.set(MilStdAttributes.DrawAsIcon, "true");
+    if (view.shadow) attributes.set(MilStdAttributes.OutlineSymbol, "true");
+
+    const drawn = MilStdIconRenderer.getInstance().RenderSVG(sidc, iconOnly ? new Map() : modifierMap(graphic, sidc), attributes);
+    if (!drawn) {
+      warnSidc(sidc, "renderer returned no icon");
+      return finish(renderFallback(graphic, view, size));
+    }
+    const bounds = drawn.getImageBounds();
+    return finish(
+      drawnFromSvg(
+        drawn.getSVG(),
+        view,
+        Math.max(1, bounds.getWidth()),
+        Math.max(1, bounds.getHeight()),
+        drawn.getSymbolCenterX(),
+        drawn.getSymbolCenterY(),
+        graphic,
+      ),
+    );
+  } catch (error) {
+    warnSidc(sidc, error instanceof Error ? error.message : "render failed");
+    return finish(renderFallback(graphic, view, size));
+  }
 }
 
 export function symbolAllows(graphic: Pick<Graphic, "renderer" | "basicId" | "affiliation" | "status" | "echelon" | "headquarters" | "taskForce" | "feint">, standard: ViewOptions["standard"], modifier: string) {
@@ -444,13 +552,13 @@ export function renderControlMeasure(graphic: Graphic, view: ViewOptions, frame:
     const dash = feature.properties?.strokeDasharray;
     return {
       ...feature,
-      properties: {
+      properties: dropNullProperties({
         ...(feature.properties || {}),
         id: graphic.id,
         mil: 1,
         selected: selected ? 1 : 0,
         dashed: Array.isArray(dash) && dash.length ? 1 : 0,
-      },
+      }),
     };
   });
   return styleBoundary(attachLabelRotation(painted), graphic, frame);

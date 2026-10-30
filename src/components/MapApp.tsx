@@ -81,8 +81,12 @@ function Shell() {
     state.options.standard,
   );
 
+  const leftCover = state.left !== null || mcooOn;
+
   return (
-    <div className={`app${state.options.theme === "dark" ? " dark" : ""}`}>
+    <div
+      className={`app${state.options.theme === "dark" ? " dark" : ""}${state.options.showScale ? " show-scale" : ""}${leftCover ? " left-open" : ""}${state.right ? " right-open" : ""}`}
+    >
       <MapCanvas mapRef={mapRef} mcoo={mcoo} />
       <div className="rail rail-left">
         <Tool title="Layers" active={state.left === "layers"} onClick={() => dispatch({ type: "toggle-left", panel: "layers" })}>
@@ -94,11 +98,11 @@ function Shell() {
         <Tool title="Print map or Export to PDF" active={state.left === "print"} onClick={() => dispatch({ type: "toggle-left", panel: "print" })}>
           <PrintIcon />
         </Tool>
-        <Tool title="Options" active={state.left === "options"} onClick={() => dispatch({ type: "toggle-left", panel: "options" })}>
+        <Tool title="Settings" active={state.left === "options"} onClick={() => dispatch({ type: "toggle-left", panel: "options" })}>
           <SlidersIcon />
         </Tool>
-        <Tool className="mcoo-tool" title="Combined obstacle overlay" active={mcooOn} onClick={() => setMcooOn((on) => !on)}>
-          MCOO
+        <Tool className="mcoo-tool" title="Obstacles. Combined obstacle overlay (MCOO)." active={mcooOn} onClick={() => setMcooOn((on) => !on)}>
+          Obstacles
         </Tool>
       </div>
       <div className="rail rail-right">
@@ -171,27 +175,39 @@ function Shell() {
         </div>
       </div>
 
-      {state.left === "layers" && <LayersPanel />}
-      {state.left === "active" && <ActiveLayerPanel />}
-      {state.left === "print" && <PrintPanel mapRef={mapRef} />}
-      {state.left === "options" && <OptionsPanel />}
-      {mcooOn && (
-        <McooPanel
-          movement={mcooMovement}
-          ground={mcooGround}
-          onMovement={setMcooMovement}
-          onGround={setMcooGround}
-          onClose={() => setMcooOn(false)}
-        />
-      )}
+      <div className="left-stack">
+        {state.left === "layers" && <LayersPanel />}
+        {state.left === "active" && <ActiveLayerPanel />}
+        {state.left === "print" && <PrintPanel mapRef={mapRef} />}
+        {state.left === "options" && <OptionsPanel />}
+        {mcooOn && (
+          <McooPanel
+            movement={mcooMovement}
+            ground={mcooGround}
+            onMovement={setMcooMovement}
+            onGround={setMcooGround}
+            onClose={() => setMcooOn(false)}
+          />
+        )}
+      </div>
       {state.right === "gallery" && <GalleryPanel />}
       {state.right === "editor" && <EditorPanel />}
       {state.right === "points" && <PointListPanel />}
       {state.infoOpen && <MessageCenter />}
 
-      {state.options.hints && hint && <div className="hint">{hint}</div>}
-      {state.selectedId && (
-        <SymbolAdjust graphic={state.graphics.find((item) => item.id === state.selectedId)} floating />
+      {hint && (
+        <div className="placement-chip" role="status">
+          <span>{state.options.hints ? hint : shortPlacementLabel(state.placing, state.options.measure, state.galleryAffiliation)}</span>
+          <button
+            type="button"
+            onClick={() => {
+              dispatch({ type: "cancel-place" });
+              dispatch({ type: "clear-measure" });
+            }}
+          >
+            Cancel
+          </button>
+        </div>
       )}
       <SymbolMenu />
       {state.options.coordinateSearch && (
@@ -218,18 +234,41 @@ function Shell() {
           {searchError && <span>{searchError}</span>}
         </form>
       )}
-      {state.options.cursorCoordinate && state.cursor && (
-        <div className="coord-readout">
-          {formatLatLng(state.cursor[0], state.cursor[1], state.options.geoFormat)}
-          {state.measurePts.length >= 1 && state.options.measure
-            ? ` · ${formatBearing(bearingDeg(state.measurePts[state.measurePts.length - 1], state.cursor), state.options.angularUnit)}`
-            : ""}
+      <div className="map-dock">
+        <div className="dock-coord">
+          {state.options.cursorCoordinate && state.cursor && (
+            <div className="coord-readout">
+              {formatLatLng(state.cursor[0], state.cursor[1], state.options.geoFormat)}
+              {state.measurePts.length >= 1 && state.options.measure
+                ? ` · ${formatBearing(bearingDeg(state.measurePts[state.measurePts.length - 1], state.cursor), state.options.angularUnit)}`
+                : ""}
+            </div>
+          )}
         </div>
-      )}
-      <MeasureReadout />
-      <AccountBar />
+        <div className="dock-center">
+          {state.selectedId && (
+            <SymbolAdjust graphic={state.graphics.find((item) => item.id === state.selectedId)} floating />
+          )}
+          <MeasureReadout />
+        </div>
+        <div className="dock-account">
+          <AccountBar />
+        </div>
+      </div>
     </div>
   );
+}
+
+function shortPlacementLabel(
+  placing: ReturnType<typeof useMapStore>["state"]["placing"],
+  measure: boolean,
+  affiliation?: ReturnType<typeof useMapStore>["state"]["galleryAffiliation"],
+) {
+  if (measure) return "Measure";
+  if (!placing) return "Measure";
+  const name = placing.mode === "symbol" ? placing.symbol.name : placing.name;
+  const side = placing.mode === "symbol" ? (affiliation === "H" ? "Enemy " : affiliation === "N" ? "Neutral " : affiliation === "U" ? "Unknown " : "Friend ") : "";
+  return `${side}${name}`.trim();
 }
 
 function placementHint(
@@ -290,7 +329,15 @@ function Tool({
   children: ReactNode;
 }) {
   return (
-    <button type="button" className={`tool${active ? " active" : ""}${className ? ` ${className}` : ""}`} title={title} disabled={disabled} onClick={onClick}>
+    <button
+      type="button"
+      className={`tool${active ? " active" : ""}${className ? ` ${className}` : ""}`}
+      title={title}
+      aria-label={title}
+      data-tip={title}
+      disabled={disabled}
+      onClick={onClick}
+    >
       {children}
     </button>
   );

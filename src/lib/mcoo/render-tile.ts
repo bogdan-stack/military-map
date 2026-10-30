@@ -272,14 +272,25 @@ function rememberZones(key: string, zones: Uint8Array) {
   }
 }
 
+/** 1×1 transparent PNG. Used when a canvas cannot be exported. */
+const TRANSPARENT_PNG = Uint8Array.from(
+  atob("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII="),
+  (char) => char.charCodeAt(0),
+);
+
+/** Encode a canvas only after it has a 2D context and a non-zero size. */
+export async function canvasToPng(canvas: OffscreenCanvas): Promise<ArrayBuffer> {
+  if (canvas.width < 1 || canvas.height < 1) return TRANSPARENT_PNG.slice().buffer;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return TRANSPARENT_PNG.slice().buffer;
+  const blob = await canvas.convertToBlob({ type: "image/png" });
+  return blob.arrayBuffer();
+}
+
 let blankPng: Promise<ArrayBuffer> | null = null;
 
 function blankTile(): Promise<ArrayBuffer> {
-  blankPng ??= (async () => {
-    const canvas = new OffscreenCanvas(1, 1);
-    const blob = await canvas.convertToBlob({ type: "image/png" });
-    return blob.arrayBuffer();
-  })();
+  blankPng ??= canvasToPng(new OffscreenCanvas(1, 1));
   return blankPng;
 }
 
@@ -381,6 +392,5 @@ export async function renderHatchTile(
   }
   if (!painted) return blankTile();
   ctx.putImageData(image, 0, 0);
-  const blob = await canvas.convertToBlob({ type: "image/png" });
-  return blob.arrayBuffer();
+  return canvasToPng(canvas);
 }

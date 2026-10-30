@@ -60,9 +60,13 @@ export function SymbolThumb({ symbol, size = 48 }: { symbol: CatalogSymbol; size
     reinforced: state.galleryReinforced,
   };
   const svg = useMemo(() => {
-    const graphic = synthetic(symbol, style);
-    if (symbol.kind !== "point") return renderMeasurePreview(graphic, state.options) ?? "";
-    return renderSymbol(graphic, state.options, size, false)?.svg ?? "";
+    try {
+      const graphic = synthetic(symbol, style);
+      if (symbol.kind !== "point") return renderMeasurePreview(graphic, state.options) ?? "";
+      return renderSymbol(graphic, state.options, size, false)?.svg ?? "";
+    } catch {
+      return "";
+    }
   }, [size, state.options, style.affiliation, style.echelon, style.feint, style.headquarters, style.reinforced, style.status, style.taskForce, symbol]);
   const [ready, setReady] = useState(false);
   useEffect(() => setReady(true), []);
@@ -73,10 +77,13 @@ export function SymbolThumb({ symbol, size = 48 }: { symbol: CatalogSymbol; size
 export function GraphicThumb({ graphic }: { graphic: Graphic }) {
   const { state } = useMapStore();
   const svg = useMemo(() => {
-    if (graphic.renderer !== "symbol") return "";
-    if (graphic.kind !== "point") return renderMeasurePreview(graphic, state.options) ?? "";
-    const drawn = renderSymbol(graphic, state.options, 64, false);
-    return drawn?.svg ?? "";
+    try {
+      if (graphic.renderer !== "symbol") return "";
+      if (graphic.kind !== "point") return renderMeasurePreview(graphic, state.options) ?? "";
+      return renderSymbol(graphic, state.options, 64, false)?.svg ?? "";
+    } catch {
+      return "";
+    }
   }, [graphic, state.options]);
   const [ready, setReady] = useState(false);
   useEffect(() => setReady(true), []);
@@ -91,15 +98,17 @@ export function GraphicThumb({ graphic }: { graphic: Graphic }) {
   return <span className="thumb-svg" dangerouslySetInnerHTML={{ __html: svg }} />;
 }
 
-const SECTIONS: { id: SectionId; label: string; glyph: string }[] = [
-  { id: "favorites", label: "My Favorites", glyph: "★" },
-  { id: "formations", label: "Formations", glyph: "▣" },
-  { id: "equipment", label: "Equipment and Installations", glyph: "⬡" },
-  { id: "tactical", label: "Tactical Graphics", glyph: "⌖" },
-  { id: "signals", label: "Signals Intelligence", glyph: "📡" },
-  { id: "stability", label: "Stability Operations", glyph: "⚑" },
-  { id: "emergency", label: "METOC", glyph: "✚" },
+const SECTIONS: { id: SectionId; label: string; short: string; glyph: string }[] = [
+  { id: "favorites", label: "My Favorites", short: "Favorites", glyph: "★" },
+  { id: "formations", label: "Formations", short: "Formations", glyph: "▣" },
+  { id: "equipment", label: "Equipment and Installations", short: "Equipment", glyph: "⬡" },
+  { id: "tactical", label: "Tactical Graphics", short: "Graphics", glyph: "⌖" },
+  { id: "signals", label: "Signals Intelligence", short: "SIGINT", glyph: "📡" },
+  { id: "stability", label: "Stability Operations", short: "Stability", glyph: "⚑" },
+  { id: "emergency", label: "METOC", short: "METOC", glyph: "✚" },
 ];
+
+const SEARCH_SECTIONS: Exclude<SectionId, "favorites">[] = ["formations", "equipment", "tactical", "signals", "stability", "emergency"];
 
 export function GalleryPanel() {
   const { state, dispatch } = useMapStore();
@@ -114,7 +123,14 @@ export function GalleryPanel() {
     return catalog.filter((symbol) => symbol.section === section);
   }, [catalog, query, section, state.favorites]);
 
-  const grouped = useMemo(() => (query ? null : groupCatalog(symbols)), [query, symbols]);
+  const searchGroups = useMemo(() => {
+    if (!query) return [];
+    return SEARCH_SECTIONS.map((id) => ({
+      id,
+      label: SECTIONS.find((item) => item.id === id)?.label ?? id,
+      symbols: symbols.filter((symbol) => symbol.section === id),
+    })).filter((group) => group.symbols.length > 0);
+  }, [query, symbols]);
 
   return (
     <aside className="panel panel-right gallery">
@@ -144,13 +160,14 @@ export function GalleryPanel() {
             type="button"
             className={section === item.id && !query ? "on" : ""}
             title={item.label}
+            aria-label={item.label}
             onClick={() => {
               dispatch({ type: "query", query: "" });
               dispatch({ type: "section", section: item.id });
             }}
           >
-            <span>{item.glyph}</span>
-            <small>{item.label}</small>
+            <span aria-hidden="true">{item.glyph}</span>
+            <small>{item.short}</small>
           </button>
         ))}
       </div>
@@ -161,6 +178,7 @@ export function GalleryPanel() {
             type="button"
             className={state.galleryAffiliation === item.code ? "on" : ""}
             style={{ borderColor: affiliationColor(item.code), color: affiliationColor(item.code) }}
+            aria-pressed={state.galleryAffiliation === item.code}
             onClick={() => dispatch({ type: "gallery-style", patch: { galleryAffiliation: item.code } })}
           >
             {item.code === "H" ? "Enemy" : item.label}
@@ -248,6 +266,8 @@ export function GalleryPanel() {
             key={kind}
             type="button"
             className={state.placing?.mode === "generic" && state.placing.kind === kind ? "on" : ""}
+            title={kind === "bean" ? "Unit position. Click the center, then the far end." : name}
+            aria-pressed={state.placing?.mode === "generic" && state.placing.kind === kind}
             onClick={() => dispatch({ type: "place-generic", kind, name })}
           >
             {name}
@@ -255,58 +275,94 @@ export function GalleryPanel() {
         ))}
       </div>
       <div className="panel-scroll">
-        {query ? (
-          <SymbolGrid symbols={symbols} placingId={placingId} favorites={state.favorites} affiliation={state.galleryAffiliation} />
-        ) : (
-          [...(grouped || [])].map(([category, subs]) => {
-            const catKey = `${section}:${category}`;
-            const open = state.openGroups[catKey] ?? category === "Movement and Maneuver";
-            return (
-              <div key={catKey}>
-                <button type="button" className="subhead" onClick={() => dispatch({ type: "toggle-group", key: catKey })}>
-                  <span>{category}</span>
-                  <span>{open ? "▾" : "▸"}</span>
-                </button>
-                {open &&
-                  (() => {
-                    const entries = [...subs.entries()];
-                    const singles = entries.filter(([, items]) => items.length === 1).flatMap(([, items]) => items);
-                    const groups = entries.filter(([, items]) => items.length > 1);
-                    return (
-                      <>
-                        {singles.length > 0 && (
-                          <SymbolGrid symbols={singles} placingId={placingId} favorites={state.favorites} affiliation={state.galleryAffiliation} />
-                        )}
-                        {groups.map(([sub, items]) => {
-                          if (sub === category) {
-                            return (
-                              <SymbolGrid key={`${catKey}:${sub}`} symbols={items} placingId={placingId} favorites={state.favorites} affiliation={state.galleryAffiliation} />
-                            );
-                          }
-                          const subKey = `${catKey}:${sub}`;
-                          const subOpen = state.openGroups[subKey] ?? (category === "Movement and Maneuver" && sub === "Infantry");
-                          return (
-                            <div key={subKey} className="subgroup">
-                              <button type="button" className="subhead minor" onClick={() => dispatch({ type: "toggle-group", key: subKey })}>
-                                <span>{sub}</span>
-                                <span>{subOpen ? "▾" : "▸"}</span>
-                              </button>
-                              {subOpen && (
-                                <SymbolGrid symbols={items} placingId={placingId} favorites={state.favorites} affiliation={state.galleryAffiliation} />
-                              )}
-                            </div>
-                          );
-                        })}
-                      </>
-                    );
-                  })()}
-              </div>
-            );
-          })
-        )}
+        {query
+          ? searchGroups.map((group) => (
+              <section key={group.id}>
+                <h3 className="search-section">{group.label}</h3>
+                <SymbolGroups
+                  symbols={group.symbols}
+                  section={group.id}
+                  placingId={placingId}
+                  favorites={state.favorites}
+                  affiliation={state.galleryAffiliation}
+                  defaultOpen
+                />
+              </section>
+            ))
+          : (
+              <SymbolGroups
+                symbols={symbols}
+                section={section}
+                placingId={placingId}
+                favorites={state.favorites}
+                affiliation={state.galleryAffiliation}
+                defaultOpen={false}
+              />
+            )}
         {!symbols.length && <p className="empty">No symbols in this set.</p>}
       </div>
     </aside>
+  );
+}
+
+function SymbolGroups({
+  symbols,
+  section,
+  placingId,
+  favorites,
+  affiliation,
+  defaultOpen,
+}: {
+  symbols: CatalogSymbol[];
+  section: string;
+  placingId: string | null;
+  favorites: string[];
+  affiliation: Affiliation;
+  defaultOpen: boolean;
+}) {
+  const { state, dispatch } = useMapStore();
+  const grouped = useMemo(() => groupCatalog(symbols), [symbols]);
+  return (
+    <>
+      {[...grouped].map(([category, subs]) => {
+        const catKey = `${section}:${category}`;
+        const open = state.openGroups[catKey] ?? (defaultOpen || category === "Movement and Maneuver");
+        const entries = [...subs.entries()];
+        const singles = entries.filter(([, items]) => items.length === 1).flatMap(([, items]) => items);
+        const groups = entries.filter(([, items]) => items.length > 1);
+        return (
+          <div key={catKey}>
+            <button type="button" className="subhead" aria-expanded={open} onClick={() => dispatch({ type: "toggle-group", key: catKey })}>
+              <span>{category}</span>
+              <span>{open ? "▾" : "▸"}</span>
+            </button>
+            {open && (
+              <>
+                {singles.length > 0 && (
+                  <SymbolGrid symbols={singles} placingId={placingId} favorites={favorites} affiliation={affiliation} />
+                )}
+                {groups.map(([sub, items]) => {
+                  if (sub === category) {
+                    return <SymbolGrid key={`${catKey}:${sub}`} symbols={items} placingId={placingId} favorites={favorites} affiliation={affiliation} />;
+                  }
+                  const subKey = `${catKey}:${sub}`;
+                  const subOpen = state.openGroups[subKey] ?? (defaultOpen || (category === "Movement and Maneuver" && sub === "Infantry"));
+                  return (
+                    <div key={subKey} className="subgroup">
+                      <button type="button" className="subhead minor" aria-expanded={subOpen} onClick={() => dispatch({ type: "toggle-group", key: subKey })}>
+                        <span>{sub}</span>
+                        <span>{subOpen ? "▾" : "▸"}</span>
+                      </button>
+                      {subOpen && <SymbolGrid symbols={items} placingId={placingId} favorites={favorites} affiliation={affiliation} />}
+                    </div>
+                  );
+                })}
+              </>
+            )}
+          </div>
+        );
+      })}
+    </>
   );
 }
 
@@ -338,6 +394,7 @@ function SymbolGrid({
           }}
         >
           <SymbolThumb symbol={symbol} />
+          <span className="symbol-name">{symbol.name}</span>
           {favorites.includes(symbol.id) && <i className="fav">★</i>}
         </button>
       ))}
@@ -361,14 +418,14 @@ function ScaleSlider({ graphic }: { graphic: Graphic }) {
   const scale = graphicScale(graphic);
   return (
     <label className="opt-row">
-      Scale
+      Symbol size
       <input
         type="range"
         min={0.25}
         max={4}
         step={0.05}
         value={scale}
-        aria-label="Symbol scale"
+        aria-label="Symbol size"
         onPointerDown={() => {
           from.current = graphicScale(graphic);
         }}
@@ -819,11 +876,17 @@ export function OptionsPanel() {
   const set = (patch: Partial<ViewOptions>) => dispatch({ type: "options", patch });
   return (
     <aside className="panel panel-left options">
+      <header className="panel-head">
+        <strong>Settings</strong>
+        <button type="button" onClick={() => dispatch({ type: "toggle-left", panel: "options" })} aria-label="Close settings">
+          Close
+        </button>
+      </header>
       <div className="panel-scroll">
-        <details open>
+        <details>
           <summary>General</summary>
           <label className="opt-row">
-            Work mode
+            Symbology standard
             <select value={options.standard} onChange={(event) => set({ standard: event.target.value as ViewOptions["standard"] })}>
               <option value="2525">MIL-STD-2525</option>
               <option value="APP6">APP-6</option>
@@ -841,7 +904,7 @@ export function OptionsPanel() {
             Show hints
           </label>
         </details>
-        <details open>
+        <details>
           <summary>Unit settings</summary>
           <label className="opt-row">
             Distance
