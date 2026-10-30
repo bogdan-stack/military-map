@@ -79,7 +79,7 @@ export type Standard = "2525" | "APP6";
 
 export type ViewOptions = {
   standard: Standard;
-  theme: "light" | "dark";
+  theme: "light" | "dark" | "night";
   hints: boolean;
   distanceUnit: DistanceUnit;
   angularUnit: AngularUnit;
@@ -98,6 +98,12 @@ export type ViewOptions = {
   symbolFrame: boolean;
   shadow: boolean;
   strokeWidth: number;
+  /** Combined obstacle overlay. Saved with the map. */
+  mcoo: boolean;
+  mcooMovement: "tracked" | "wheeled" | "foot";
+  mcooGround: "dry" | "wet" | "mud" | "snow" | "frozen";
+  /** 0.2–1. Raster opacity of the overlay. */
+  mcooOpacity: number;
 };
 
 export type Placing =
@@ -144,6 +150,10 @@ export const DEFAULT_OPTIONS: ViewOptions = {
   symbolFrame: true,
   shadow: true,
   strokeWidth: 3,
+  mcoo: false,
+  mcooMovement: "tracked",
+  mcooGround: "dry",
+  mcooOpacity: 1,
 };
 
 export const ECHELONS: { code: string; label: string }[] = [

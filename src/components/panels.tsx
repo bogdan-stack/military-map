@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
 import type { Map } from "maplibre-gl";
 import { getCatalog, groupCatalog } from "@/lib/catalog";
+import { GROUNDS, MOVEMENTS, type GroundCondition, type MovementClass } from "@/lib/mcoo/classify";
 import { formatDistance, formatLatLng, parseCoordinate, pathLength, ringArea } from "@/lib/geo";
 import { useMapStore } from "@/lib/store";
 import { affiliationColor, canScaleGraphic, FIELD, frameColor, graphicRotation, graphicScale, isBoundary, renderMeasurePreview, renderSymbol, shownCoordinates, symbolAllows, TEXT_MODIFIERS, toBasePoint } from "@/lib/symbols";
@@ -122,6 +123,11 @@ export function GalleryPanel() {
     if (section === "favorites") return catalog.filter((symbol) => state.favorites.includes(symbol.id));
     return catalog.filter((symbol) => symbol.section === section);
   }, [catalog, query, section, state.favorites]);
+
+  const recentSymbols = useMemo(
+    () => state.recent.flatMap((id) => catalog.filter((symbol) => symbol.id === id)),
+    [catalog, state.recent],
+  );
 
   const searchGroups = useMemo(() => {
     if (!query) return [];
@@ -275,6 +281,17 @@ export function GalleryPanel() {
         ))}
       </div>
       <div className="panel-scroll">
+        {!query && recentSymbols.length > 0 && (
+          <section>
+            <h3 className="search-section">Recent</h3>
+            <SymbolGrid
+              symbols={recentSymbols}
+              placingId={placingId}
+              favorites={state.favorites}
+              affiliation={state.galleryAffiliation}
+            />
+          </section>
+        )}
         {query
           ? searchGroups.map((group) => (
               <section key={group.id}>
@@ -381,22 +398,29 @@ function SymbolGrid({
   return (
     <div className="symbol-grid">
       {symbols.map((symbol) => (
-        <button
+        <div
           key={symbol.id}
-          type="button"
           className={`symbol-cell side-${affiliation.toLowerCase()}${placingId === symbol.id ? " on" : ""}`}
-          title={symbol.name}
-          aria-label={symbol.name}
-          onClick={() => dispatch({ type: "place-symbol", symbol })}
           onContextMenu={(event) => {
             event.preventDefault();
             dispatch({ type: "toggle-favorite", id: symbol.id });
           }}
         >
-          <SymbolThumb symbol={symbol} />
-          <span className="symbol-name">{symbol.name}</span>
-          {favorites.includes(symbol.id) && <i className="fav">★</i>}
-        </button>
+          <button type="button" className="symbol-place" aria-label={symbol.name} onClick={() => dispatch({ type: "place-symbol", symbol })}>
+            <SymbolThumb symbol={symbol} />
+            <span className="symbol-name">{symbol.name}</span>
+          </button>
+          <button
+            type="button"
+            className={`fav-btn${favorites.includes(symbol.id) ? " on" : ""}`}
+            aria-pressed={favorites.includes(symbol.id)}
+            aria-label={favorites.includes(symbol.id) ? `Remove ${symbol.name} from favorites` : `Favorite ${symbol.name}`}
+            onClick={() => dispatch({ type: "toggle-favorite", id: symbol.id })}
+          >
+            ★
+          </button>
+          <span className="symbol-card">{symbol.basicId}</span>
+        </div>
       ))}
     </div>
   );
@@ -496,10 +520,65 @@ export function SymbolMenu() {
       >
         Paste
       </button>
-      <button type="button" role="menuitem" disabled={!graphic || locked} onClick={() => graphic && dispatch({ type: "remove", id: graphic.id })}>
+      <button type="button" role="menuitem" disabled={!graphic || locked} onClick={() => graphic && dispatch({ type: "remove", ids: [graphic.id] })}>
         Delete
       </button>
     </div>
+  );
+}
+
+function UndoField({
+  value,
+  label,
+  onLive,
+  onCommit,
+}: {
+  value: string;
+  label: string;
+  onLive: (value: string) => void;
+  onCommit: (from: string, value: string) => void;
+}) {
+  const from = useRef<string | null>(null);
+  return (
+    <input
+      value={value}
+      aria-label={label}
+      onFocus={() => {
+        if (from.current === null) from.current = value;
+      }}
+      onChange={(event) => {
+        if (from.current === null) from.current = value;
+        onLive(event.target.value);
+      }}
+      onBlur={(event) => {
+        const origin = from.current;
+        from.current = null;
+        if (origin !== null && event.target.value !== origin) onCommit(origin, event.target.value);
+      }}
+    />
+  );
+}
+
+function ColorField({ graphic }: { graphic: Graphic }) {
+  const { dispatch } = useMapStore();
+  const from = useRef(graphic.color);
+  const commit = (value: string) => {
+    if (value === from.current) return;
+    dispatch({ type: "patch", id: graphic.id, from: { color: from.current }, patch: { color: value } });
+    from.current = value;
+  };
+  return (
+    <input
+      type="color"
+      aria-label="Color"
+      value={graphic.color}
+      onPointerDown={() => {
+        from.current = graphic.color;
+      }}
+      onChange={(event) => dispatch({ type: "patch", id: graphic.id, patch: { color: event.target.value }, history: false })}
+      onBlur={(event) => commit(event.target.value)}
+      onPointerUp={(event) => commit(event.currentTarget.value)}
+    />
   );
 }
 
@@ -521,10 +600,11 @@ export function EditorPanel() {
           <div className="editor-preview">
             <GraphicThumb graphic={graphic} />
             <div>
-              <input
+              <UndoField
                 value={graphic.name}
-                aria-label="Name"
-                onChange={(event) => dispatch({ type: "patch", id: graphic.id, patch: { name: event.target.value } })}
+                label="Name"
+                onLive={(value) => dispatch({ type: "patch", id: graphic.id, patch: { name: value }, history: false })}
+                onCommit={(from, value) => dispatch({ type: "patch", id: graphic.id, from: { name: from }, patch: { name: value } })}
               />
               <small>{graphic.renderer === "symbol" ? "MIL-STD-2525" : "Generic graphic"}</small>
             </div>
@@ -616,11 +696,7 @@ export function EditorPanel() {
           {graphic.renderer === "generic" && graphic.kind !== "bean" && (
             <label className="opt-row">
               Color
-              <input
-                type="color"
-                value={graphic.color}
-                onChange={(event) => dispatch({ type: "patch", id: graphic.id, patch: { color: event.target.value } })}
-              />
+              <ColorField graphic={graphic} />
             </label>
           )}
           <ModifierFields graphic={graphic} />
@@ -628,8 +704,17 @@ export function EditorPanel() {
             <button type="button" onClick={() => dispatch({ type: "duplicate", id: graphic.id })}>
               Duplicate
             </button>
-            <button type="button" className="danger" onClick={() => dispatch({ type: "remove", id: graphic.id })}>
-              Delete
+            <button
+              type="button"
+              className="danger"
+              onClick={() =>
+                dispatch({
+                  type: "remove",
+                  ids: state.selectedIds.includes(graphic.id) ? state.selectedIds : [graphic.id],
+                })
+              }
+            >
+              {state.selectedIds.length > 1 && state.selectedIds.includes(graphic.id) ? `Delete ${state.selectedIds.length}` : "Delete"}
             </button>
           </div>
         </div>
@@ -669,10 +754,19 @@ function ModifierFields({ graphic }: { graphic: Graphic }) {
               <option value="±">Reinforced and reduced (±)</option>
             </select>
           ) : (
-            <input
+            <UndoField
               value={graphic.modifiers[field.key]}
-              onChange={(event) =>
-                dispatch({ type: "modifiers", id: graphic.id, modifiers: { [field.key]: event.target.value } })
+              label={boundaryFieldLabel(graphic, field.key, field.label)}
+              onLive={(value) =>
+                dispatch({ type: "modifiers", id: graphic.id, modifiers: { [field.key]: value }, history: false })
+              }
+              onCommit={(from, value) =>
+                dispatch({
+                  type: "modifiers",
+                  id: graphic.id,
+                  from: { [field.key]: from },
+                  modifiers: { [field.key]: value },
+                })
               }
             />
           )}
@@ -734,23 +828,105 @@ export function PointListPanel() {
   );
 }
 
+function McooLayerRow() {
+  const { state, dispatch } = useMapStore();
+  const [open, setOpen] = useState(false);
+  const options = state.options;
+  const set = (patch: Partial<ViewOptions>) => dispatch({ type: "options", patch });
+  const movement = MOVEMENTS.find((item) => item.id === options.mcooMovement)?.label ?? "Tracked";
+  const ground = GROUNDS.find((item) => item.id === options.mcooGround)?.label ?? "Dry";
+  return (
+    <div className={`overlay-block${options.mcoo ? " on" : ""}`}>
+      <div className="overlay-row">
+        <button type="button" className="overlay-expand" aria-expanded={open} aria-label={open ? "Hide MCOO settings" : "MCOO settings"} onClick={() => setOpen((value) => !value)}>
+          {open ? "▾" : "▸"}
+        </button>
+        <button type="button" className="overlay-name" onClick={() => set({ mcoo: !options.mcoo })}>
+          <strong>MCOO</strong>
+          <small>{options.mcoo ? `${movement} · ${ground}` : "Off"}</small>
+        </button>
+        <button
+          type="button"
+          role="switch"
+          className={`switch${options.mcoo ? " on" : ""}`}
+          aria-checked={options.mcoo}
+          aria-label="MCOO"
+          onClick={() => set({ mcoo: !options.mcoo })}
+        />
+      </div>
+      {open && (
+        <div className="overlay-details">
+          <label className="mcoo-field">
+            Movement
+            <select value={options.mcooMovement} onChange={(event) => set({ mcooMovement: event.target.value as MovementClass })}>
+              {MOVEMENTS.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="mcoo-field">
+            Ground
+            <select value={options.mcooGround} onChange={(event) => set({ mcooGround: event.target.value as GroundCondition })}>
+              {GROUNDS.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="mcoo-field">
+            Opacity {Math.round(options.mcooOpacity * 100)}%
+            <input
+              type="range"
+              min={0.2}
+              max={1}
+              step={0.05}
+              value={options.mcooOpacity}
+              aria-label="MCOO opacity"
+              onChange={(event) => set({ mcooOpacity: Number(event.target.value) })}
+            />
+          </label>
+          <div className="mcoo-legend">
+            <div>
+              <span className="mcoo-swatch restricted" /> Restricted
+            </div>
+            <div>
+              <span className="mcoo-swatch severe" /> Severely restricted
+            </div>
+            <div>
+              <span className="mcoo-swatch built" /> Built-up
+            </div>
+            <div>
+              <span className="mcoo-swatch water" /> Water
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function LayersPanel() {
   const { state, dispatch } = useMapStore();
   return (
     <aside className="panel panel-left">
       <header className="panel-head">
-        <strong>Local MilX Layers</strong>
+        <strong>Layers</strong>
         <button type="button" onClick={() => dispatch({ type: "add-layer" })}>
           New Layer
         </button>
       </header>
       <div className="panel-scroll">
+        <McooLayerRow />
         {state.layers.map((layer) => (
           <div key={layer.id} className={`layer-row${layer.id === state.activeLayerId ? " active" : ""}`}>
             <button type="button" className="layer-name" onClick={() => dispatch({ type: "activate-layer", id: layer.id })}>
               {layer.name}
             </button>
             <input
+              key={`${layer.id}:${layer.name}`}
               aria-label={`Rename ${layer.name}`}
               defaultValue={layer.name}
               onBlur={(event) => dispatch({ type: "rename-layer", id: layer.id, name: event.target.value || layer.name })}
@@ -855,8 +1031,8 @@ export function ActiveLayerPanel() {
           <button
             key={graphic.id}
             type="button"
-            className={`graphic-row${graphic.id === state.selectedId ? " on" : ""}`}
-            onClick={() => dispatch({ type: "select", id: graphic.id })}
+            className={`graphic-row${state.selectedIds.includes(graphic.id) ? " on" : ""}`}
+            onClick={(event) => dispatch({ type: "select", id: graphic.id, shift: event.shiftKey })}
           >
             <GraphicThumb graphic={graphic} />
             <span>
@@ -897,6 +1073,7 @@ export function OptionsPanel() {
             <select value={options.theme} onChange={(event) => set({ theme: event.target.value as ViewOptions["theme"] })}>
               <option value="light">Light</option>
               <option value="dark">Dark</option>
+              <option value="night">Night</option>
             </select>
           </label>
           <label className="check-row">
@@ -1054,7 +1231,7 @@ export function MessageCenter() {
       <div className="panel-scroll">
         <p>Plan a mission on the map. Drop MIL-STD-2525 and APP-6 symbols, draw control measures, and keep them on layers.</p>
         <p>Symbols are the published MIL-STD-2525D plates, drawn by the <a href="https://github.com/missioncommand/mil-sym-ts">US Army mil-sym renderer</a>. Right-click a symbol in the gallery to favorite it.</p>
-        <p>Ctrl+Z undo, Ctrl+Y redo, Delete removes the selection, Enter finishes a line or area, Esc cancels placement.</p>
+        <p>MCOO is the first row in Layers. Turn it on to draw restricted ground. Ctrl+K opens commands. Shift-click adds to the selection. Ctrl+Z undoes, Ctrl+Shift+Z redoes, Delete removes the selection, Enter finishes a line or area, Esc cancels placement.</p>
       </div>
     </aside>
   );

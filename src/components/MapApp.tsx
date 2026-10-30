@@ -5,10 +5,9 @@ import type { Map } from "maplibre-gl";
 import { formatBearing, formatLatLng, parseCoordinate, bearingDeg } from "@/lib/geo";
 import { symbolContract } from "@/lib/symbols";
 import { MapStoreProvider, useMapStore } from "@/lib/store";
-import type { GroundCondition, MovementClass } from "@/lib/mcoo/classify";
 import { AccountBar } from "./AccountBar";
+import { CommandPalette } from "./CommandPalette";
 import { MapCanvas } from "./MapCanvas";
-import { McooPanel } from "./McooPanel";
 import {
   ActiveLayerPanel,
   EditorPanel,
@@ -37,32 +36,45 @@ function Shell() {
   const [pitched, setPitched] = useState(false);
   const [search, setSearch] = useState("");
   const [searchError, setSearchError] = useState("");
-  const [mcooOn, setMcooOn] = useState(false);
-  const [mcooMovement, setMcooMovement] = useState<MovementClass>("tracked");
-  const [mcooGround, setMcooGround] = useState<GroundCondition>("dry");
+  const [palette, setPalette] = useState(false);
   const mcoo = useMemo(
-    () => (mcooOn ? { movement: mcooMovement, ground: mcooGround } : null),
-    [mcooOn, mcooMovement, mcooGround],
+    () =>
+      state.options.mcoo
+        ? {
+            movement: state.options.mcooMovement,
+            ground: state.options.mcooGround,
+            opacity: state.options.mcooOpacity,
+          }
+        : null,
+    [state.options.mcoo, state.options.mcooGround, state.options.mcooMovement, state.options.mcooOpacity],
   );
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
       const typing = target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT");
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "z") {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        setPalette((open) => !open);
+      } else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "z") {
         event.preventDefault();
         dispatch({ type: event.shiftKey ? "redo" : "undo" });
       } else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "y") {
         event.preventDefault();
         dispatch({ type: "redo" });
       } else if (event.key === "Escape") {
+        if (palette) {
+          setPalette(false);
+          return;
+        }
         if (state.menu) dispatch({ type: "menu", menu: null });
         dispatch({ type: "cancel-place" });
         dispatch({ type: "clear-measure" });
       } else if (event.key === "Enter" && !typing) {
         dispatch({ type: "finish-draft" });
-      } else if ((event.key === "Delete" || event.key === "Backspace") && !typing && state.selectedId) {
-        dispatch({ type: "remove", id: state.selectedId });
+      } else if ((event.key === "Delete" || event.key === "Backspace") && !typing) {
+        const ids = state.selectedIds.length ? state.selectedIds : state.selectedId ? [state.selectedId] : [];
+        if (ids.length) dispatch({ type: "remove", ids });
       } else if (event.key === "F11") {
         event.preventDefault();
         toggleFullscreen();
@@ -70,7 +82,13 @@ function Shell() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [dispatch, state.menu, state.selectedId]);
+  }, [dispatch, palette, state.menu, state.selectedId, state.selectedIds]);
+
+  useEffect(() => {
+    if (!state.toast) return;
+    const timer = window.setTimeout(() => dispatch({ type: "dismiss-toast" }), 5000);
+    return () => window.clearTimeout(timer);
+  }, [dispatch, state.toast]);
 
   const hint = placementHint(
     state.placing,
@@ -81,11 +99,11 @@ function Shell() {
     state.options.standard,
   );
 
-  const leftCover = state.left !== null || mcooOn;
+  const leftCover = state.left !== null;
 
   return (
     <div
-      className={`app${state.options.theme === "dark" ? " dark" : ""}${state.options.showScale ? " show-scale" : ""}${leftCover ? " left-open" : ""}${state.right ? " right-open" : ""}`}
+      className={`app${state.options.theme === "light" ? "" : " dark"}${state.options.theme === "night" ? " night" : ""}${state.options.showScale ? " show-scale" : ""}${leftCover ? " left-open" : ""}${state.right ? " right-open" : ""}`}
     >
       <MapCanvas mapRef={mapRef} mcoo={mcoo} />
       <div className="rail rail-left">
@@ -100,9 +118,6 @@ function Shell() {
         </Tool>
         <Tool title="Settings" active={state.left === "options"} onClick={() => dispatch({ type: "toggle-left", panel: "options" })}>
           <SlidersIcon />
-        </Tool>
-        <Tool className="mcoo-tool" title="Obstacles. Combined obstacle overlay (MCOO)." active={mcooOn} onClick={() => setMcooOn((on) => !on)}>
-          Obstacles
         </Tool>
       </div>
       <div className="rail rail-right">
@@ -127,10 +142,10 @@ function Shell() {
         </Tool>
       </div>
       <div className="rail rail-corner">
-        <Tool title="Undo (Ctrl + Z)" disabled={!state.past.length} onClick={() => dispatch({ type: "undo" })}>
+        <Tool title="Undo (Ctrl+Z)" disabled={!state.past.length} onClick={() => dispatch({ type: "undo" })}>
           <UndoIcon />
         </Tool>
-        <Tool title="Redo (Ctrl + Y)" disabled={!state.future.length} onClick={() => dispatch({ type: "redo" })}>
+        <Tool title="Redo (Ctrl+Shift+Z)" disabled={!state.future.length} onClick={() => dispatch({ type: "redo" })}>
           <RedoIcon />
         </Tool>
         <Tool
@@ -180,15 +195,6 @@ function Shell() {
         {state.left === "active" && <ActiveLayerPanel />}
         {state.left === "print" && <PrintPanel mapRef={mapRef} />}
         {state.left === "options" && <OptionsPanel />}
-        {mcooOn && (
-          <McooPanel
-            movement={mcooMovement}
-            ground={mcooGround}
-            onMovement={setMcooMovement}
-            onGround={setMcooGround}
-            onClose={() => setMcooOn(false)}
-          />
-        )}
       </div>
       {state.right === "gallery" && <GalleryPanel />}
       {state.right === "editor" && <EditorPanel />}
@@ -255,6 +261,18 @@ function Shell() {
           <AccountBar />
         </div>
       </div>
+      <CommandPalette open={palette} mapRef={mapRef} onClose={() => setPalette(false)} />
+      {state.toast && (
+        <div className="toast" role="status">
+          <span>{state.toast.text}</span>
+          <button type="button" onClick={() => dispatch({ type: "undo" })}>
+            Undo
+          </button>
+          <button type="button" className="toast-dismiss" aria-label="Dismiss" onClick={() => dispatch({ type: "dismiss-toast" })}>
+            ×
+          </button>
+        </div>
+      )}
     </div>
   );
 }

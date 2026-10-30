@@ -3,8 +3,10 @@
 import {
   createContext,
   useContext,
+  useEffect,
   useMemo,
   useReducer,
+  useRef,
   type Dispatch,
   type ReactNode,
 } from "react";
@@ -38,6 +40,8 @@ export type MapState = {
   graphics: Graphic[];
   activeLayerId: string;
   selectedId: string | null;
+  selectedIds: string[];
+  toast: { text: string } | null;
   left: LeftPanel;
   right: RightPanel;
   placing: Placing | null;
@@ -45,6 +49,7 @@ export type MapState = {
   measurePts: [number, number][];
   options: ViewOptions;
   favorites: string[];
+  recent: string[];
   past: Snapshot[];
   future: Snapshot[];
   infoOpen: boolean;
@@ -76,22 +81,26 @@ type Action =
   | { type: "toggle-left"; panel: Exclude<LeftPanel, null> }
   | { type: "toggle-right"; panel: Exclude<RightPanel, null> }
   | { type: "close-panels" }
-  | { type: "select"; id: string | null }
+  | { type: "select"; id: string | null; shift?: boolean }
   | { type: "place-symbol"; symbol: CatalogSymbol }
   | { type: "place-generic"; kind: Extract<Placing, { mode: "generic" }>["kind"]; name: string }
   | { type: "cancel-place" }
-  | { type: "map-click"; lng: number; lat: number }
+  | { type: "map-click"; lng: number; lat: number; shift?: boolean }
   | { type: "finish-draft" }
   | { type: "move"; id: string; coordinates: [number, number][]; history?: boolean }
   | { type: "commit-move"; id: string; from: [number, number][]; to: [number, number][] }
+  | { type: "move-group"; items: { id: string; coordinates: [number, number][] }[]; history?: boolean }
+  | { type: "commit-group"; items: { id: string; from: [number, number][]; to: [number, number][] }[] }
   | { type: "scale"; id: string; scale: number; history?: boolean; from?: number }
   | { type: "rotate"; id: string; rotation: number; history?: boolean; from?: number }
   | { type: "menu"; menu: SymbolMenu | null }
   | { type: "copy"; id: string }
   | { type: "paste"; lng: number; lat: number }
-  | { type: "patch"; id: string; patch: Partial<Graphic> }
-  | { type: "modifiers"; id: string; modifiers: Partial<Modifiers> }
-  | { type: "remove"; id: string }
+  | { type: "patch"; id: string; patch: Partial<Graphic>; history?: boolean; from?: Partial<Graphic> }
+  | { type: "modifiers"; id: string; modifiers: Partial<Modifiers>; history?: boolean; from?: Partial<Modifiers> }
+  | { type: "set-recent"; ids: string[] }
+  | { type: "remove"; ids: string[] }
+  | { type: "dismiss-toast" }
   | { type: "duplicate"; id: string }
   | { type: "add-layer" }
   | { type: "rename-layer"; id: string; name: string }
@@ -133,6 +142,32 @@ function snapshot(state: MapState): Snapshot {
   };
 }
 
+function applyGraphicPatch(state: MapState, id: string, patch: Partial<Graphic>): MapState {
+  return {
+    ...state,
+    graphics: state.graphics.map((graphic) => {
+      if (graphic.id !== id) return graphic;
+      const next = { ...graphic, ...patch };
+      if (patch.affiliation && graphic.renderer === "symbol") next.color = affiliationColor(patch.affiliation);
+      if (patch.affiliation && graphic.kind === "bean") next.color = frameColor(patch.affiliation);
+      return next;
+    }),
+  };
+}
+
+function applyModifiers(state: MapState, id: string, modifiers: Partial<Modifiers>): MapState {
+  return {
+    ...state,
+    graphics: state.graphics.map((graphic) =>
+      graphic.id === id ? { ...graphic, modifiers: { ...graphic.modifiers, ...modifiers } } : graphic,
+    ),
+  };
+}
+
+function sameFields(patch: object, current: object) {
+  return Object.entries(patch).every(([key, value]) => (current as Record<string, unknown>)[key] === value);
+}
+
 function withHistory(prev: MapState, next: MapState): MapState {
   return {
     ...next,
@@ -157,6 +192,8 @@ export const initialState: MapState = {
   graphics: [],
   activeLayerId: starterLayer.id,
   selectedId: null,
+  selectedIds: [],
+  toast: null,
   left: null,
   right: null,
   placing: null,
@@ -164,6 +201,7 @@ export const initialState: MapState = {
   measurePts: [],
   options: DEFAULT_OPTIONS,
   favorites: [],
+  recent: [],
   past: [],
   future: [],
   infoOpen: false,
@@ -260,29 +298,45 @@ function commit(state: MapState, coordinates: [number, number][]): MapState {
     ...state,
     graphics: [...state.graphics, graphic],
     selectedId: graphic.id,
+    selectedIds: [graphic.id],
     draft: [],
   });
 }
 
 function reducer(state: MapState, action: Action): MapState {
   switch (action.type) {
-    case "hydrate":
-      return { ...state, ...action.state, past: [], future: [] };
+    case "hydrate": {
+      const next = { ...state, ...action.state, past: [], future: [], toast: null };
+      const graphics = next.graphics ?? [];
+      let selectedIds = (next.selectedIds ?? []).filter((id) => graphics.some((graphic) => graphic.id === id));
+      if (!selectedIds.length && next.selectedId && graphics.some((graphic) => graphic.id === next.selectedId)) {
+        selectedIds = [next.selectedId];
+      }
+      const selectedId = selectedIds.includes(next.selectedId ?? "") ? next.selectedId : (selectedIds[0] ?? null);
+      return { ...next, selectedIds, selectedId };
+    }
     case "toggle-left":
       return { ...state, left: state.left === action.panel ? null : action.panel, infoOpen: false };
     case "toggle-right":
       return { ...state, right: state.right === action.panel ? null : action.panel, infoOpen: false };
     case "close-panels":
       return { ...state, left: null, right: null, infoOpen: false };
-    case "select":
-      return {
-        ...state,
-        selectedId: action.id,
-        menu: null,
-        right: action.id && !state.right ? "editor" : state.right,
-      };
-    case "place-symbol":
-      return { ...state, placing: { mode: "symbol", symbol: action.symbol }, draft: [], right: "gallery" };
+    case "select": {
+      if (!action.id) return { ...state, selectedId: null, selectedIds: [], menu: null };
+      if (action.shift) {
+        const exists = state.selectedIds.includes(action.id);
+        const selectedIds = exists ? state.selectedIds.filter((id) => id !== action.id) : [...new Set([...state.selectedIds, action.id])];
+        return { ...state, selectedIds, selectedId: selectedIds[selectedIds.length - 1] ?? null, menu: null };
+      }
+      return { ...state, selectedId: action.id, selectedIds: [action.id], menu: null };
+    }
+    case "place-symbol": {
+      const recent =
+        state.recent[0] === action.symbol.id
+          ? state.recent
+          : [action.symbol.id, ...state.recent.filter((id) => id !== action.symbol.id)].slice(0, 8);
+      return { ...state, placing: { mode: "symbol", symbol: action.symbol }, draft: [], right: "gallery", recent };
+    }
     case "place-generic":
       return {
         ...state,
@@ -296,7 +350,10 @@ function reducer(state: MapState, action: Action): MapState {
       if (state.options.measure) {
         return { ...state, measurePts: [...state.measurePts, [action.lng, action.lat]] };
       }
-      if (!state.placing) return { ...state, selectedId: null, menu: null };
+      if (!state.placing) {
+        if (action.shift) return state;
+        return { ...state, selectedId: null, selectedIds: [], menu: null };
+      }
       if (!activeUnlocked(state)) return state;
       const point: [number, number] = [action.lng, action.lat];
       if (state.placing.mode === "symbol") {
@@ -405,38 +462,44 @@ function reducer(state: MapState, action: Action): MapState {
         ...state,
         graphics: [...state.graphics, copy],
         selectedId: copy.id,
+        selectedIds: [copy.id],
         menu: null,
       });
     }
     case "patch": {
-      const patch = action.patch;
-      return {
-        ...state,
-        graphics: state.graphics.map((graphic) => {
-          if (graphic.id !== action.id) return graphic;
-          const next = { ...graphic, ...patch };
-          if (patch.affiliation && graphic.renderer === "symbol") next.color = affiliationColor(patch.affiliation);
-          if (patch.affiliation && graphic.kind === "bean") next.color = frameColor(patch.affiliation);
-          return next;
-        }),
-      };
+      if (action.history === false) return applyGraphicPatch(state, action.id, action.patch);
+      if (action.from && sameFields(action.patch, action.from)) return state;
+      const graphic = state.graphics.find((item) => item.id === action.id);
+      if (!graphic) return state;
+      if (!action.from && sameFields(action.patch, graphic)) return state;
+      const before = action.from ? applyGraphicPatch(state, action.id, action.from) : state;
+      return withHistory(before, applyGraphicPatch(state, action.id, action.patch));
     }
-    case "modifiers":
-      return {
+    case "modifiers": {
+      if (action.history === false) return applyModifiers(state, action.id, action.modifiers);
+      if (action.from && sameFields(action.modifiers, action.from)) return state;
+      const graphic = state.graphics.find((item) => item.id === action.id);
+      if (!graphic) return state;
+      if (!action.from && sameFields(action.modifiers, graphic.modifiers)) return state;
+      const before = action.from ? applyModifiers(state, action.id, action.from) : state;
+      return withHistory(before, applyModifiers(state, action.id, action.modifiers));
+    }
+    case "set-recent":
+      return { ...state, recent: action.ids.slice(0, 8) };
+    case "remove": {
+      const ids = new Set(action.ids);
+      const doomed = state.graphics.filter((graphic) => ids.has(graphic.id));
+      if (!doomed.length) return state;
+      const label = doomed.length === 1 ? doomed[0].modifiers.uniqueDesignation || doomed[0].name : `${doomed.length} symbols`;
+      const next = withHistory(state, {
         ...state,
-        graphics: state.graphics.map((graphic) =>
-          graphic.id === action.id
-            ? { ...graphic, modifiers: { ...graphic.modifiers, ...action.modifiers } }
-            : graphic,
-        ),
-      };
-    case "remove":
-      return withHistory(state, {
-        ...state,
-        graphics: state.graphics.filter((graphic) => graphic.id !== action.id),
-        selectedId: state.selectedId === action.id ? null : state.selectedId,
-        menu: state.menu?.id === action.id ? null : state.menu,
+        graphics: state.graphics.filter((graphic) => !ids.has(graphic.id)),
+        selectedId: state.selectedId && ids.has(state.selectedId) ? null : state.selectedId,
+        selectedIds: state.selectedIds.filter((id) => !ids.has(id)),
+        menu: state.menu?.id && ids.has(state.menu.id) ? null : state.menu,
       });
+      return { ...next, toast: { text: `Deleted ${label}` } };
+    }
     case "duplicate": {
       const source = state.graphics.find((graphic) => graphic.id === action.id);
       if (!source) return state;
@@ -450,6 +513,7 @@ function reducer(state: MapState, action: Action): MapState {
         ...state,
         graphics: [...state.graphics, copy],
         selectedId: copy.id,
+        selectedIds: [copy.id],
       });
     }
     case "add-layer": {
@@ -484,32 +548,61 @@ function reducer(state: MapState, action: Action): MapState {
         layers,
         graphics: state.graphics.filter((graphic) => graphic.layerId !== action.id),
         activeLayerId: state.activeLayerId === action.id ? layers[0].id : state.activeLayerId,
-        selectedId: state.graphics.find((g) => g.id === state.selectedId)?.layerId === action.id
-          ? null
-          : state.selectedId,
+        selectedId: state.graphics.find((g) => g.id === state.selectedId)?.layerId === action.id ? null : state.selectedId,
+        selectedIds: state.selectedIds.filter((id) => state.graphics.find((graphic) => graphic.id === id)?.layerId !== action.id),
       });
     }
     case "undo": {
       const prev = state.past[state.past.length - 1];
       if (!prev) return state;
+      const selectedIds = state.selectedIds.filter((id) => prev.graphics.some((graphic) => graphic.id === id));
       return {
         ...state,
         ...prev,
         past: state.past.slice(0, -1),
         future: [snapshot(state), ...state.future].slice(0, 80),
-        selectedId: prev.graphics.some((g) => g.id === state.selectedId) ? state.selectedId : null,
+        selectedIds,
+        selectedId: selectedIds.includes(state.selectedId ?? "") ? state.selectedId : selectedIds[0] ?? null,
+        toast: null,
       };
     }
     case "redo": {
       const next = state.future[0];
       if (!next) return state;
+      const selectedIds = state.selectedIds.filter((id) => next.graphics.some((graphic) => graphic.id === id));
       return {
         ...state,
         ...next,
         past: [...state.past, snapshot(state)].slice(-80),
         future: state.future.slice(1),
-        selectedId: next.graphics.some((g) => g.id === state.selectedId) ? state.selectedId : null,
+        selectedIds,
+        selectedId: selectedIds.includes(state.selectedId ?? "") ? state.selectedId : selectedIds[0] ?? null,
+        toast: null,
       };
+    }
+    case "dismiss-toast":
+      return { ...state, toast: null };
+    case "move-group": {
+      const byId = new Map(action.items.map((item) => [item.id, item.coordinates]));
+      const next = {
+        ...state,
+        graphics: state.graphics.map((graphic) => (byId.has(graphic.id) ? { ...graphic, coordinates: byId.get(graphic.id)! } : graphic)),
+      };
+      return action.history === false ? next : withHistory(state, next);
+    }
+    case "commit-group": {
+      const changed = action.items.filter(
+        (item) => item.from.length !== item.to.length || item.from.some((point, index) => point[0] !== item.to[index]?.[0] || point[1] !== item.to[index]?.[1]),
+      );
+      if (!changed.length) return state;
+      const apply = (key: "from" | "to") => ({
+        ...state,
+        graphics: state.graphics.map((graphic) => {
+          const item = changed.find((entry) => entry.id === graphic.id);
+          return item ? { ...graphic, coordinates: item[key] } : graphic;
+        }),
+      });
+      return withHistory(apply("from"), apply("to"));
     }
     case "options": {
       const options = { ...state.options, ...action.patch };
@@ -558,9 +651,33 @@ const MapStoreContext = createContext<{
   persistence: PersistenceControls;
 } | null>(null);
 
+const RECENT_KEY = "military-map-recent";
+
+function readRecent(): string[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = localStorage.getItem(RECENT_KEY);
+    const ids = raw ? JSON.parse(raw) : [];
+    return Array.isArray(ids) ? ids.filter((id) => typeof id === "string").slice(0, 8) : [];
+  } catch {
+    return [];
+  }
+}
+
 export function MapStoreProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(reducer, initialState);
+  const recentReady = useRef(false);
   const persistence = useWorkspaceSync(state, dispatch, restoreGraphic);
+  useEffect(() => {
+    const ids = readRecent();
+    if (ids.length) dispatch({ type: "set-recent", ids });
+    recentReady.current = true;
+  }, [dispatch]);
+  useEffect(() => {
+    if (!recentReady.current) return;
+    if (state.recent.length === 0 && readRecent().length > 0) return;
+    localStorage.setItem(RECENT_KEY, JSON.stringify(state.recent));
+  }, [state.recent]);
   const value = useMemo(() => ({ state, dispatch, persistence }), [state, dispatch, persistence]);
   return <MapStoreContext.Provider value={value}>{children}</MapStoreContext.Provider>;
 }

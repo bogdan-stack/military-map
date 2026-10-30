@@ -9,6 +9,7 @@ import { useMapStore } from "@/lib/store";
 import { affiliationColor, bearingFromNorth, canScaleGraphic, centroid, coalescedNumber, defaultModifiers, dropNullProperties, frameColor, graphicRotation, graphicScale, placingIsMulti, renderControlMeasure, renderSymbol, rotationHandlePosition, shownCoordinates, symbolContract, toBasePoint, type MapFrame } from "@/lib/symbols";
 import type { Graphic } from "@/lib/types";
 import { syncMcooHatch, type McooHatchView } from "@/lib/mcoo/layer";
+import { snapLngLat } from "@/lib/snap";
 
 const STYLES: Record<string, string | maplibregl.StyleSpecification> = {
   terrain: "https://tiles.openfreemap.org/styles/liberty",
@@ -106,6 +107,7 @@ export function MapCanvas({ mapRef, mcoo }: { mapRef: MutableRefObject<Map | nul
       canvasContextAttributes: { preserveDrawingBuffer: true },
     });
     mapRef.current = map;
+    map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "top-right");
 
     map.on("load", () => {
       tint(map);
@@ -127,15 +129,21 @@ export function MapCanvas({ mapRef, mcoo }: { mapRef: MutableRefObject<Map | nul
       }
       const current = stateRef.current;
       const id = featureId(map, event.point);
+      const shift = event.originalEvent.shiftKey;
       if (id && !current.placing && !current.options.measure) {
-        dispatch({ type: "select", id });
+        dispatch({ type: "select", id, shift });
         return;
       }
       if (event.originalEvent.detail > 1 && current.placing?.mode === "symbol") {
         const contract = symbolContract(current.placing.symbol.basicId, current.options.standard);
         if (contract.mode !== "point") return;
       }
-      dispatch({ type: "map-click", lng: event.lngLat.lng, lat: event.lngLat.lat });
+      let lng = event.lngLat.lng;
+      let lat = event.lngLat.lat;
+      if (current.placing) {
+        [lng, lat] = snapLngLat(map, lng, lat, current.graphics, new Set(), current.draft);
+      }
+      dispatch({ type: "map-click", lng, lat, shift });
     });
     map.on("contextmenu", (event) => {
       event.preventDefault();
@@ -164,23 +172,19 @@ export function MapCanvas({ mapRef, mcoo }: { mapRef: MutableRefObject<Map | nul
       const layer = graphic ? current.layers.find((item) => item.id === graphic.layerId) : undefined;
       if (!graphic || layer?.locked || layer?.visible === false) return;
       if (graphic.kind === "point" || graphic.kind === "pin" || graphic.kind === "text") return;
+      const items = dragMembers(current, graphic.id);
+      if (!items.some((item) => item.id === graphic.id)) return;
       const origin = event.point;
       const startLng = event.lngLat.lng;
       const startLat = event.lngLat.lat;
-      const from = graphic.coordinates.map((point) => [point[0], point[1]] as [number, number]);
+      const skip = new Set(items.map((item) => item.id));
       let moved = false;
       map.dragPan.disable();
       const onMove = (ev: maplibregl.MapMouseEvent) => {
         if (Math.hypot(ev.point.x - origin.x, ev.point.y - origin.y) < 4) return;
         moved = true;
-        const dx = ev.lngLat.lng - startLng;
-        const dy = ev.lngLat.lat - startLat;
-        dispatch({
-          type: "move",
-          id: graphic.id,
-          history: false,
-          coordinates: from.map(([lng, lat]) => [lng + dx, lat + dy]),
-        });
+        const { dx, dy } = snappedDelta(map, startLng, startLat, ev.lngLat.lng, ev.lngLat.lat, stateRef.current.graphics, skip);
+        dispatch({ type: "move-group", history: false, items: translated(items, dx, dy) });
       };
       const onUp = (ev: maplibregl.MapMouseEvent) => {
         map.off("mousemove", onMove);
@@ -188,13 +192,14 @@ export function MapCanvas({ mapRef, mcoo }: { mapRef: MutableRefObject<Map | nul
         map.dragPan.enable();
         if (!moved) return;
         suppressClick = true;
-        const dx = ev.lngLat.lng - startLng;
-        const dy = ev.lngLat.lat - startLat;
+        const { dx, dy } = snappedDelta(map, startLng, startLat, ev.lngLat.lng, ev.lngLat.lat, stateRef.current.graphics, skip);
         dispatch({
-          type: "commit-move",
-          id: graphic.id,
-          from,
-          to: from.map(([lng, lat]) => [lng + dx, lat + dy]),
+          type: "commit-group",
+          items: items.map((item) => ({
+            id: item.id,
+            from: item.from,
+            to: item.from.map(([lng, lat]) => [lng + dx, lat + dy] as [number, number]),
+          })),
         });
       };
       map.on("mousemove", onMove);
@@ -286,6 +291,7 @@ export function MapCanvas({ mapRef, mcoo }: { mapRef: MutableRefObject<Map | nul
     state.measurePts,
     state.options,
     state.selectedId,
+    state.selectedIds,
   ]);
 
   useEffect(() => {
@@ -329,7 +335,8 @@ export function MapCanvas({ mapRef, mcoo }: { mapRef: MutableRefObject<Map | nul
     };
   }, [mapRef, state.options.distanceUnit, state.options.showScale]);
 
-  const filter = `brightness(${1 + state.options.brightness / 100}) hue-rotate(${state.options.hue}deg) saturate(${state.options.chroma / 100})`;
+  const dim = state.options.theme === "night" ? 0.62 : 1;
+  const filter = `brightness(${(1 + state.options.brightness / 100) * dim}) hue-rotate(${state.options.hue}deg) saturate(${state.options.chroma / 100})`;
 
   return <div ref={hostRef} className="map-host" style={{ filter }} />;
 }
@@ -619,7 +626,7 @@ function draw(
 
   for (const graphic of state.graphics) {
     if (!layerVisible(graphic, state.layers) || graphic.coordinates.length === 0) continue;
-    const selected = state.selectedId === graphic.id ? 1 : 0;
+    const selected = state.selectedIds.includes(graphic.id) || state.selectedId === graphic.id ? 1 : 0;
     const color = strokeOf(graphic);
     const dashed = graphic.status === "A" ? 1 : 0;
     const bean = graphic.kind === "bean";
@@ -627,7 +634,7 @@ function draw(
 
     if (graphic.kind === "point" || graphic.kind === "pin" || graphic.kind === "text") {
       live.add(graphic.id);
-      upsertMarker(map, markers, graphic, state, selected === 1, dispatch);
+      upsertMarker(map, markers, graphic, state, selected === 1, stateRef, dispatch);
       continue;
     }
 
@@ -729,7 +736,7 @@ function measureFeatures(map: Map, state: ReturnType<typeof useMapStore>["state"
     if (!layerVisible(graphic, state.layers)) continue;
     if (graphic.renderer !== "symbol" || (graphic.kind !== "line" && graphic.kind !== "area")) continue;
     if (graphic.coordinates.length < 1) continue;
-    const selected = state.selectedId === graphic.id;
+    const selected = state.selectedIds.includes(graphic.id) || state.selectedId === graphic.id;
     const rendered = renderControlMeasure(graphic, state.options, frame, selected);
     if (rendered?.length) {
       features.push(...rendered);
@@ -825,6 +832,38 @@ function featureId(map: Map, point: maplibregl.PointLike) {
   return null;
 }
 
+type DragItem = { id: string; from: [number, number][] };
+
+function dragMembers(state: ReturnType<typeof useMapStore>["state"], primaryId: string): DragItem[] {
+  const ids = state.selectedIds.includes(primaryId) ? state.selectedIds : [primaryId];
+  return ids.flatMap((id) => {
+    const item = state.graphics.find((graphic) => graphic.id === id);
+    const layer = item ? state.layers.find((entry) => entry.id === item.layerId) : undefined;
+    if (!item || layer?.locked || layer?.visible === false || item.coordinates.length === 0) return [];
+    return [{ id, from: item.coordinates.map((point) => [point[0], point[1]] as [number, number]) }];
+  });
+}
+
+function translated(items: DragItem[], dx: number, dy: number) {
+  return items.map((item) => ({
+    id: item.id,
+    coordinates: item.from.map(([lng, lat]) => [lng + dx, lat + dy] as [number, number]),
+  }));
+}
+
+function snappedDelta(
+  map: Map,
+  startLng: number,
+  startLat: number,
+  lng: number,
+  lat: number,
+  graphics: Graphic[],
+  skip: Set<string>,
+) {
+  const [snapLng, snapLat] = snapLngLat(map, lng, lat, graphics, skip);
+  return { dx: snapLng - startLng, dy: snapLat - startLat, lng: snapLng, lat: snapLat };
+}
+
 function placeHandle(
   map: Map,
   anchors: globalThis.Map<string, maplibregl.Marker>,
@@ -856,6 +895,7 @@ function placeHandle(
       });
     });
     let origin: [number, number][] = [];
+    let group: DragItem[] = [];
     let startLng = 0;
     let startLat = 0;
     let startScale = 1;
@@ -872,6 +912,8 @@ function placeHandle(
       element.dataset.dragging = "1";
       const current = stateRef.current.graphics.find((item) => item.id === graphic.id);
       origin = current ? current.coordinates.map((point) => [point[0], point[1]] as [number, number]) : [];
+      group = dragMembers(stateRef.current, graphic.id);
+      if (!group.length && origin.length) group = [{ id: graphic.id, from: origin }];
       startScale = current ? graphicScale(current) : 1;
       startRotation = current ? graphicRotation(current) : 0;
       const lngLat = marker?.getLngLat();
@@ -882,12 +924,10 @@ function placeHandle(
       const lngLat = marker?.getLngLat();
       if (!lngLat || !origin.length) return;
       if (kind === "move") {
-        dispatch({
-          type: "move",
-          id: graphic.id,
-          history: false,
-          coordinates: origin.map(([lng, lat]) => [lng + lngLat.lng - startLng, lat + lngLat.lat - startLat]),
-        });
+        const skip = new Set(group.map((item) => item.id));
+        const { dx, dy, lng, lat } = snappedDelta(map, startLng, startLat, lngLat.lng, lngLat.lat, stateRef.current.graphics, skip);
+        if (lng !== lngLat.lng || lat !== lngLat.lat) marker?.setLngLat([lng, lat]);
+        dispatch({ type: "move-group", history: false, items: translated(group, dx, dy) });
         return;
       }
       const [originX, originY] = graphic.kind === "bean" ? origin[0] : centroid(origin);
@@ -910,11 +950,15 @@ function placeHandle(
       const lngLat = marker?.getLngLat();
       if (!lngLat || !origin.length) return;
       if (kind === "move") {
+        const skip = new Set(group.map((item) => item.id));
+        const { dx, dy } = snappedDelta(map, startLng, startLat, lngLat.lng, lngLat.lat, stateRef.current.graphics, skip);
         dispatch({
-          type: "commit-move",
-          id: graphic.id,
-          from: origin,
-          to: origin.map(([lng, lat]) => [lng + lngLat.lng - startLng, lat + lngLat.lat - startLat]),
+          type: "commit-group",
+          items: group.map((item) => ({
+            id: item.id,
+            from: item.from,
+            to: item.from.map(([lng, lat]) => [lng + dx, lat + dy] as [number, number]),
+          })),
         });
         return;
       }
@@ -1001,20 +1045,41 @@ function syncAnchors(
         });
         marker = new maplibregl.Marker({ element, draggable: true, anchor: "center" }).setLngLat(coord).addTo(map);
         marker.getElement().setAttribute("aria-label", `Point ${index + 1}`);
+        let from: [number, number][] = [];
+        const movedPoint = (lng: number, lat: number) => {
+          const current = stateRef.current.graphics.find((item) => item.id === graphic.id);
+          if (!current || !from.length) return null;
+          const scale = canScaleGraphic(current) ? graphicScale(current) : 1;
+          const rotation = canScaleGraphic(current) ? graphicRotation(current) : 0;
+          const base = toBasePoint(from, scale, rotation, [lng, lat]);
+          return from.map((point, pointIndex) => (pointIndex === index ? base : point));
+        };
         marker.on("dragstart", () => {
           element.dataset.dragging = "1";
+          const current = stateRef.current.graphics.find((item) => item.id === graphic.id);
+          from = current ? current.coordinates.map((point) => [point[0], point[1]] as [number, number]) : [];
+        });
+        const snappedVertex = (lng: number, lat: number) => {
+          const current = stateRef.current.graphics.find((item) => item.id === graphic.id);
+          const extras = current ? shownCoordinates(current).filter((_, pointIndex) => pointIndex !== index) : [];
+          const [snapLng, snapLat] = snapLngLat(map, lng, lat, stateRef.current.graphics, new Set([graphic.id]), extras);
+          if (snapLng !== lng || snapLat !== lat) marker?.setLngLat([snapLng, snapLat]);
+          return movedPoint(snapLng, snapLat);
+        };
+        marker.on("drag", () => {
+          const lngLat = marker?.getLngLat();
+          if (!lngLat) return;
+          const coordinates = snappedVertex(lngLat.lng, lngLat.lat);
+          if (!coordinates) return;
+          dispatch({ type: "move", id: graphic.id, coordinates, history: false });
         });
         marker.on("dragend", () => {
           delete element.dataset.dragging;
           const lngLat = marker?.getLngLat();
           if (!lngLat) return;
-          const current = stateRef.current.graphics.find((item) => item.id === graphic.id);
-          if (!current) return;
-          const scale = canScaleGraphic(current) ? graphicScale(current) : 1;
-          const rotation = canScaleGraphic(current) ? graphicRotation(current) : 0;
-          const base = toBasePoint(current.coordinates, scale, rotation, [lngLat.lng, lngLat.lat]);
-          const coordinates = current.coordinates.map((point, pointIndex) => (pointIndex === index ? base : point));
-          dispatch({ type: "move", id: graphic.id, coordinates });
+          const coordinates = snappedVertex(lngLat.lng, lngLat.lat);
+          if (!coordinates) return;
+          dispatch({ type: "commit-move", id: graphic.id, from, to: coordinates });
         });
         anchors.set(key, marker);
       } else if (!marker.getElement().dataset.dragging) {
@@ -1062,8 +1127,11 @@ function upsertMarker(
   graphic: Graphic,
   state: ReturnType<typeof useMapStore>["state"],
   selected: boolean,
+  stateRef: MutableRefObject<ReturnType<typeof useMapStore>["state"]>,
   dispatch: ReturnType<typeof useMapStore>["dispatch"],
 ) {
+  const existing = markers.get(graphic.id);
+  if (existing?.getElement().dataset.dragging) return;
   const locked = state.layers.find((layer) => layer.id === graphic.layerId)?.locked;
   const element = document.createElement("div");
   element.className = `symbol-marker${selected ? " selected" : ""}`;
@@ -1104,9 +1172,14 @@ function upsertMarker(
             text ? `<div class="map-pin-label">${escapeHtml(text)}</div>` : ""
           }`;
   }
+  let dragged = false;
   element.addEventListener("click", (event) => {
     event.stopPropagation();
-    dispatch({ type: "select", id: graphic.id });
+    if (dragged) {
+      dragged = false;
+      return;
+    }
+    dispatch({ type: "select", id: graphic.id, shift: event.shiftKey });
   });
   element.addEventListener("contextmenu", (event) => {
     event.preventDefault();
@@ -1122,9 +1195,41 @@ function upsertMarker(
   const marker = new maplibregl.Marker({ element, anchor, offset, draggable: !locked })
     .setLngLat(graphic.coordinates[0])
     .addTo(map);
-  marker.on("dragend", () => {
+  let group: DragItem[] = [];
+  let startLng = graphic.coordinates[0]?.[0] ?? 0;
+  let startLat = graphic.coordinates[0]?.[1] ?? 0;
+  marker.on("dragstart", () => {
+    element.dataset.dragging = "1";
+    const current = stateRef.current;
+    const live = current.graphics.find((item) => item.id === graphic.id);
+    startLng = live?.coordinates[0]?.[0] ?? startLng;
+    startLat = live?.coordinates[0]?.[1] ?? startLat;
+    group = dragMembers(current, graphic.id);
+    if (!group.length && live) group = [{ id: graphic.id, from: live.coordinates.map((point) => [point[0], point[1]]) }];
+  });
+  marker.on("drag", () => {
+    dragged = true;
+    if (!group.length) return;
     const lngLat = marker.getLngLat();
-    dispatch({ type: "move", id: graphic.id, coordinates: [[lngLat.lng, lngLat.lat]] });
+    const skip = new Set(group.map((item) => item.id));
+    const { dx, dy, lng, lat } = snappedDelta(map, startLng, startLat, lngLat.lng, lngLat.lat, stateRef.current.graphics, skip);
+    if (lng !== lngLat.lng || lat !== lngLat.lat) marker.setLngLat([lng, lat]);
+    dispatch({ type: "move-group", history: false, items: translated(group, dx, dy) });
+  });
+  marker.on("dragend", () => {
+    delete element.dataset.dragging;
+    if (!group.length) return;
+    const lngLat = marker.getLngLat();
+    const skip = new Set(group.map((item) => item.id));
+    const { dx, dy } = snappedDelta(map, startLng, startLat, lngLat.lng, lngLat.lat, stateRef.current.graphics, skip);
+    dispatch({
+      type: "commit-group",
+      items: group.map((item) => ({
+        id: item.id,
+        from: item.from,
+        to: item.from.map(([lng, lat]) => [lng + dx, lat + dy] as [number, number]),
+      })),
+    });
   });
   markers.set(graphic.id, marker);
 }

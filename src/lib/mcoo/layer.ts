@@ -8,7 +8,10 @@ const LAYER = "mcoo-hatch";
 export type McooHatchView = {
   movement: MovementClass;
   ground: GroundCondition;
+  opacity: number;
 } | null;
+
+let lastTiles = "";
 
 function tileUrl(view: Exclude<McooHatchView, null>) {
   return `coo://overlay/v7/{z}/{x}/{y}/${view.movement}/${view.ground}`;
@@ -34,21 +37,35 @@ function addLayer(map: Map) {
   else map.addLayer(layer);
 }
 
+function paintOpacity(map: Map, opacity: number) {
+  if (!map.getLayer(LAYER)) return;
+  const value = Math.min(1, Math.max(0.15, opacity));
+  map.setPaintProperty(LAYER, "raster-opacity", value);
+}
+
 /** Shows or clears the obstacle hatching. The tiles are drawn in the browser. */
 export function syncMcooHatch(map: Map, view: McooHatchView) {
   if (!view) {
+    lastTiles = "";
     if (map.getLayer(LAYER)) map.removeLayer(LAYER);
     if (map.getSource(SOURCE)) map.removeSource(SOURCE);
     return;
   }
   ensureCooProtocol();
   const tiles = [tileUrl(view)];
+  const key = tiles[0];
   const existing = map.getSource(SOURCE) as RasterTileSource | undefined;
   if (existing) {
-    existing.setTiles(tiles);
+    if (lastTiles !== key) {
+      existing.setTiles(tiles);
+      lastTiles = key;
+    }
     addLayer(map);
+    paintOpacity(map, view.opacity);
     return;
   }
   map.addSource(SOURCE, { type: "raster", tiles, tileSize: 256, minzoom: 10, maxzoom: 14 });
+  lastTiles = key;
   addLayer(map);
+  paintOpacity(map, view.opacity);
 }
