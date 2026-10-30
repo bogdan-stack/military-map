@@ -6,6 +6,7 @@ import { formatBearing, formatLatLng, parseCoordinate, bearingDeg } from "@/lib/
 import { symbolContract } from "@/lib/symbols";
 import { MapStoreProvider, useMapStore } from "@/lib/store";
 import type { GroundCondition, MovementClass } from "@/lib/mcoo/classify";
+import { AccountBar } from "./AccountBar";
 import { MapCanvas } from "./MapCanvas";
 import { McooPanel } from "./McooPanel";
 import {
@@ -226,6 +227,7 @@ function Shell() {
         </div>
       )}
       <MeasureReadout />
+      <AccountBar />
     </div>
   );
 }

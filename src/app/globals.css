@@ -203,6 +203,33 @@ a { color: #0b57d0; }
 .coord-readout { left: 8px; bottom: 28px; }
 .measure-chip { left: 50%; bottom: 18px; transform: translateX(-50%); display: flex; gap: 8px; align-items: center; }
 
+.account-bar {
+  position: absolute;
+  z-index: 6;
+  right: 52px;
+  bottom: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  max-width: min(560px, calc(100vw - 110px));
+  background: #fff;
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow);
+  padding: 4px 8px;
+  font-size: 12px;
+}
+.account-bar.warn { border-color: #c47b00; }
+.account-bar button, .account-form input {
+  border: 1px solid #c5c5c5;
+  background: #fff;
+  padding: 3px 7px;
+}
+.account-form { display: flex; flex-wrap: wrap; gap: 4px; }
+.account-form input { width: 140px; }
+.account-email { color: #555; max-width: 160px; overflow: hidden; text-overflow: ellipsis; }
+.account-notice { color: #8a3b00; }
+
 .anchor-handle {
   width: 14px;
   height: 14px;
@@ -321,16 +348,18 @@ a { color: #0b57d0; }
 .rail-left .tool.mcoo-tool { width: auto; min-width: 38px; padding: 0 4px; font-size: 9px; font-weight: 700; letter-spacing: 0.02em; }
 
 .app.dark { --ink: #eee; --panel: #2a2a2a; --line: #555; color: #eee; }
-.app.dark .tool, .app.dark .panel, .app.dark .hint, .app.dark .coord-search, .app.dark .coord-readout, .app.dark .measure-chip, .app.dark .scale-tool, .app.dark .symbol-menu,
+.app.dark .tool, .app.dark .panel, .app.dark .hint, .app.dark .coord-search, .app.dark .coord-readout, .app.dark .measure-chip, .app.dark .account-bar, .app.dark .scale-tool, .app.dark .symbol-menu,
 .app.dark .panel-head, .app.dark .gallery-switch, .app.dark input, .app.dark select, .app.dark .generic-row button, .app.dark .button-row button {
   background: #2a2a2a;
   color: #eee;
   border-color: #555;
 }
+.app.dark .account-bar button, .app.dark .account-form input { background: #2a2a2a; color: #eee; border-color: #555; }
+.app.dark .account-email { color: #ccc; }
 .app.dark .mcoo-note { color: #ddd; }
 .app.dark .section-row button small { color: #ccc; }
 .app.dark .gallery-switch button.on, .app.dark .tool.active { background: #1d4e66; }
 
 @media print {
-  .rail, .panel, .hint, .coord-search, .measure-chip { display: none !important; }
+  .rail, .panel, .hint, .coord-search, .measure-chip, .account-bar { display: none !important; }
 }

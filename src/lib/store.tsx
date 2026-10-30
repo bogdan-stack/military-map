@@ -3,13 +3,12 @@
 import {
   createContext,
   useContext,
-  useEffect,
   useMemo,
   useReducer,
-  useState,
   type Dispatch,
   type ReactNode,
 } from "react";
+import { useWorkspaceSync, type PersistenceControls } from "@/persistence/useWorkspaceSync";
 import { affiliationColor, centroid, defaultModifiers, frameColor, symbolContract } from "./symbols";
 import {
   AFFILIATIONS,
@@ -27,8 +26,6 @@ import {
   type SectionId,
   type ViewOptions,
 } from "./types";
-
-const STORAGE_KEY = "military-map-v2";
 
 type Snapshot = {
   layers: MapLayer[];
@@ -555,51 +552,16 @@ function reducer(state: MapState, action: Action): MapState {
   }
 }
 
-const MapStoreContext = createContext<{ state: MapState; dispatch: Dispatch<Action> } | null>(null);
+const MapStoreContext = createContext<{
+  state: MapState;
+  dispatch: Dispatch<Action>;
+  persistence: PersistenceControls;
+} | null>(null);
 
 export function MapStoreProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(reducer, initialState);
-  const [ready, setReady] = useState(false);
-
-  useEffect(() => {
-    try {
-      const raw = localStorage.getItem(STORAGE_KEY);
-      if (raw) {
-        const saved = JSON.parse(raw) as Partial<MapState>;
-        dispatch({
-          type: "hydrate",
-          state: {
-            layers: saved.layers?.length ? saved.layers : initialState.layers,
-            graphics: (saved.graphics || []).map((graphic) => restoreGraphic(graphic, saved.options?.standard || "2525")),
-            activeLayerId: saved.activeLayerId || initialState.activeLayerId,
-            options: { ...DEFAULT_OPTIONS, ...(saved.options || {}) },
-            favorites: saved.favorites || [],
-          },
-        });
-      }
-    } catch {
-      /* ignore broken local saves */
-    }
-    setReady(true);
-  }, []);
-
-  useEffect(() => {
-    if (!ready) return;
-    const payload = {
-      layers: state.layers,
-      graphics: state.graphics,
-      activeLayerId: state.activeLayerId,
-      options: state.options,
-      favorites: state.favorites,
-    };
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
-    } catch {
-      /* quota */
-    }
-  }, [ready, state.layers, state.graphics, state.activeLayerId, state.options, state.favorites]);
-
-  const value = useMemo(() => ({ state, dispatch }), [state]);
+  const persistence = useWorkspaceSync(state, dispatch, restoreGraphic);
+  const value = useMemo(() => ({ state, dispatch, persistence }), [state, dispatch, persistence]);
   return <MapStoreContext.Provider value={value}>{children}</MapStoreContext.Provider>;
 }
 
