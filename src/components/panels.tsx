@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
-import { X } from "lucide-react";
+import { ChevronDown, CloudSun, Flag, Radio, Search, Star, Users, Warehouse, Waypoints, X, type LucideIcon } from "lucide-react";
 import type { Map } from "maplibre-gl";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
@@ -102,14 +102,14 @@ export function GraphicThumb({ graphic }: { graphic: Graphic }) {
   return <span className="thumb-svg" dangerouslySetInnerHTML={{ __html: svg }} />;
 }
 
-const SECTIONS: { id: SectionId; label: string; short: string; glyph: string }[] = [
-  { id: "favorites", label: "My Favorites", short: "Favorites", glyph: "★" },
-  { id: "formations", label: "Formations", short: "Formations", glyph: "▣" },
-  { id: "equipment", label: "Equipment and Installations", short: "Equipment", glyph: "⬡" },
-  { id: "tactical", label: "Tactical Graphics", short: "Graphics", glyph: "⌖" },
-  { id: "signals", label: "Signals Intelligence", short: "SIGINT", glyph: "📡" },
-  { id: "stability", label: "Stability Operations", short: "Stability", glyph: "⚑" },
-  { id: "emergency", label: "METOC", short: "METOC", glyph: "✚" },
+const SECTIONS: { id: SectionId; label: string; short: string; icon: LucideIcon }[] = [
+  { id: "favorites", label: "My Favorites", short: "Favorites", icon: Star },
+  { id: "formations", label: "Formations", short: "Formations", icon: Users },
+  { id: "equipment", label: "Equipment and Installations", short: "Equipment", icon: Warehouse },
+  { id: "tactical", label: "Tactical Graphics", short: "Graphics", icon: Waypoints },
+  { id: "signals", label: "Signals Intelligence", short: "SIGINT", icon: Radio },
+  { id: "stability", label: "Stability Operations", short: "Stability", icon: Flag },
+  { id: "emergency", label: "METOC", short: "METOC", icon: CloudSun },
 ];
 
 const SEARCH_SECTIONS: Exclude<SectionId, "favorites">[] = ["formations", "equipment", "tactical", "signals", "stability", "emergency"];
@@ -143,21 +143,17 @@ export function GalleryPanel() {
 
   return (
     <aside className="panel panel-right gallery">
-      <div className="gallery-switch">
-        <button type="button" className={!query ? "on" : ""} onClick={() => dispatch({ type: "query", query: "" })}>
-          Symbol Gallery
-        </button>
-        <button type="button" className={query ? "on" : ""} onClick={() => dispatch({ type: "section", section: "formations" })}>
-          MIL-STD Search
-        </button>
+      <header className="panel-head">
+        <strong>Add symbol</strong>
         <button type="button" className="icon-x" onClick={() => dispatch({ type: "toggle-right", panel: "gallery" })} aria-label="Close">
           <X size={16} />
         </button>
-      </div>
+      </header>
       <div className="search-line">
+        <Search size={16} aria-hidden="true" />
         <Input
           value={state.query}
-          placeholder="Search MIL-STD-2525 symbols"
+          placeholder="Search symbols"
           onChange={(event) => dispatch({ type: "query", query: event.target.value })}
           aria-label="Symbol search"
         />
@@ -175,7 +171,7 @@ export function GalleryPanel() {
               dispatch({ type: "section", section: item.id });
             }}
           >
-            <span aria-hidden="true">{item.glyph}</span>
+            <item.icon size={16} strokeWidth={1.75} aria-hidden="true" />
             <small>{item.short}</small>
           </button>
         ))}
@@ -354,7 +350,7 @@ function SymbolGroups({
           <div key={catKey}>
             <button type="button" className="subhead" aria-expanded={open} onClick={() => dispatch({ type: "toggle-group", key: catKey })}>
               <span>{category}</span>
-              <span>{open ? "▾" : "▸"}</span>
+              <ChevronDown size={16} className={open ? "" : "-rotate-90"} />
             </button>
             {open && (
               <>
@@ -371,7 +367,7 @@ function SymbolGroups({
                     <div key={subKey} className="subgroup">
                       <button type="button" className="subhead minor" aria-expanded={subOpen} onClick={() => dispatch({ type: "toggle-group", key: subKey })}>
                         <span>{sub}</span>
-                        <span>{subOpen ? "▾" : "▸"}</span>
+                        <ChevronDown size={16} className={subOpen ? "" : "-rotate-90"} />
                       </button>
                       {subOpen && <SymbolGrid symbols={items} placingId={placingId} favorites={favorites} affiliation={affiliation} />}
                     </div>
@@ -420,7 +416,7 @@ function SymbolGrid({
             aria-label={favorites.includes(symbol.id) ? `Remove ${symbol.name} from favorites` : `Favorite ${symbol.name}`}
             onClick={() => dispatch({ type: "toggle-favorite", id: symbol.id })}
           >
-            ★
+            <Star size={14} fill={favorites.includes(symbol.id) ? "currentColor" : "none"} />
           </button>
           <span className="symbol-card">{symbol.basicId}</span>
         </div>
