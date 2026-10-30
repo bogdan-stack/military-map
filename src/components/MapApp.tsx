@@ -1,7 +1,12 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Box, Info, Layers, List, ListTree, Maximize2, Plus, Printer, Redo2, SlidersHorizontal, SquarePen, Undo2 } from "lucide-react";
 import type { Map } from "maplibre-gl";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { cn } from "@/lib/utils";
 import { formatBearing, formatLatLng, parseCoordinate, bearingDeg } from "@/lib/geo";
 import { symbolContract } from "@/lib/symbols";
 import { MapStoreProvider, useMapStore } from "@/lib/store";
@@ -102,27 +107,20 @@ function Shell() {
   const leftCover = state.left !== null;
 
   return (
+    <TooltipProvider>
     <div
       className={`app${state.options.theme === "light" ? "" : " dark"}${state.options.theme === "night" ? " night" : ""}${state.options.showScale ? " show-scale" : ""}${leftCover ? " left-open" : ""}${state.right ? " right-open" : ""}`}
     >
       <MapCanvas mapRef={mapRef} mcoo={mcoo} />
       <div className="rail rail-left">
+        <Tool primary title="Add new symbol" active={state.right === "gallery"} onClick={() => dispatch({ type: "toggle-right", panel: "gallery" })}>
+          <Plus />
+        </Tool>
         <Tool title="Layers" active={state.left === "layers"} onClick={() => dispatch({ type: "toggle-left", panel: "layers" })}>
-          <LayersIcon />
+          <Layers />
         </Tool>
         <Tool title="Active/Selected Layer" active={state.left === "active"} onClick={() => dispatch({ type: "toggle-left", panel: "active" })}>
-          <LayerIcon />
-        </Tool>
-        <Tool title="Print map or Export to PDF" active={state.left === "print"} onClick={() => dispatch({ type: "toggle-left", panel: "print" })}>
-          <PrintIcon />
-        </Tool>
-        <Tool title="Settings" active={state.left === "options"} onClick={() => dispatch({ type: "toggle-left", panel: "options" })}>
-          <SlidersIcon />
-        </Tool>
-      </div>
-      <div className="rail rail-right">
-        <Tool title="Add new symbol" active={state.right === "gallery"} onClick={() => dispatch({ type: "toggle-right", panel: "gallery" })}>
-          <PlusIcon />
+          <ListTree />
         </Tool>
         <Tool
           title="Symbol Editor"
@@ -130,7 +128,7 @@ function Shell() {
           disabled={!state.selectedId}
           onClick={() => dispatch({ type: "toggle-right", panel: "editor" })}
         >
-          <EditorIcon />
+          <SquarePen />
         </Tool>
         <Tool
           title="View and edit graphic's coordinates"
@@ -138,15 +136,20 @@ function Shell() {
           disabled={!state.selectedId}
           onClick={() => dispatch({ type: "toggle-right", panel: "points" })}
         >
-          <ListIcon />
+          <List />
         </Tool>
-      </div>
-      <div className="rail rail-corner">
+        <div className="rail-spacer" />
+        <Tool title="Print map or Export to PDF" active={state.left === "print"} onClick={() => dispatch({ type: "toggle-left", panel: "print" })}>
+          <Printer />
+        </Tool>
+        <Tool title="Settings" active={state.left === "options"} onClick={() => dispatch({ type: "toggle-left", panel: "options" })}>
+          <SlidersHorizontal />
+        </Tool>
         <Tool title="Undo (Ctrl+Z)" disabled={!state.past.length} onClick={() => dispatch({ type: "undo" })}>
-          <UndoIcon />
+          <Undo2 />
         </Tool>
         <Tool title="Redo (Ctrl+Shift+Z)" disabled={!state.future.length} onClick={() => dispatch({ type: "redo" })}>
-          <RedoIcon />
+          <Redo2 />
         </Tool>
         <Tool
           title="3D"
@@ -178,16 +181,14 @@ function Shell() {
             }
           }}
         >
-          3D
+          <Box />
         </Tool>
-        <div className="corner-row">
-          <Tool title="Message & Info Center" active={state.infoOpen} onClick={() => dispatch({ type: "info", open: !state.infoOpen })}>
-            i
-          </Tool>
-          <Tool title="Full screen [F11]" onClick={toggleFullscreen}>
-            <ExpandIcon />
-          </Tool>
-        </div>
+        <Tool title="Message & Info Center" active={state.infoOpen} onClick={() => dispatch({ type: "info", open: !state.infoOpen })}>
+          <Info />
+        </Tool>
+        <Tool title="Full screen [F11]" onClick={toggleFullscreen}>
+          <Maximize2 />
+        </Tool>
       </div>
 
       <div className="left-stack">
@@ -204,15 +205,17 @@ function Shell() {
       {hint && (
         <div className="placement-chip" role="status">
           <span>{state.options.hints ? hint : shortPlacementLabel(state.placing, state.options.measure, state.galleryAffiliation)}</span>
-          <button
+          <Button
             type="button"
+            variant="outline"
+            size="sm"
             onClick={() => {
               dispatch({ type: "cancel-place" });
               dispatch({ type: "clear-measure" });
             }}
           >
             Cancel
-          </button>
+          </Button>
         </div>
       )}
       <SymbolMenu />
@@ -230,13 +233,14 @@ function Shell() {
             mapRef.current?.flyTo({ center: point, zoom: Math.max(mapRef.current.getZoom(), 11) });
           }}
         >
-          <input
+          <Input
             value={search}
-            placeholder="lat, lon or MGRS"
+            placeholder="Search a coordinate"
             aria-label="Coordinate search"
+            className="w-[240px] border-0 shadow-none focus-visible:ring-0"
             onChange={(event) => setSearch(event.target.value)}
           />
-          <button type="submit">Go</button>
+          <Button type="submit" size="sm">Go</Button>
           {searchError && <span>{searchError}</span>}
         </form>
       )}
@@ -265,15 +269,16 @@ function Shell() {
       {state.toast && (
         <div className="toast" role="status">
           <span>{state.toast.text}</span>
-          <button type="button" onClick={() => dispatch({ type: "undo" })}>
+          <Button type="button" variant="ghost" size="sm" onClick={() => dispatch({ type: "undo" })}>
             Undo
-          </button>
-          <button type="button" className="toast-dismiss" aria-label="Dismiss" onClick={() => dispatch({ type: "dismiss-toast" })}>
+          </Button>
+          <Button type="button" variant="ghost" size="sm" aria-label="Dismiss" onClick={() => dispatch({ type: "dismiss-toast" })}>
             ×
-          </button>
+          </Button>
         </div>
       )}
     </div>
+    </TooltipProvider>
   );
 }
 
@@ -335,112 +340,33 @@ function Tool({
   title,
   active,
   disabled,
-  className,
+  primary,
   onClick,
   children,
 }: {
   title: string;
   active?: boolean;
   disabled?: boolean;
-  className?: string;
+  primary?: boolean;
   onClick: () => void;
   children: ReactNode;
 }) {
   return (
-    <button
-      type="button"
-      className={`tool${active ? " active" : ""}${className ? ` ${className}` : ""}`}
-      title={title}
-      aria-label={title}
-      data-tip={title}
-      disabled={disabled}
-      onClick={onClick}
-    >
-      {children}
-    </button>
-  );
-}
-
-function LayersIcon() {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <path d="M12 4 3 9l9 5 9-5-9-5Z" />
-      <path d="m3 14 9 5 9-5" />
-      <path d="m3 11 9 5 9-5" />
-    </svg>
-  );
-}
-function LayerIcon() {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <path d="M4 7h16M4 12h16M4 17h10" />
-    </svg>
-  );
-}
-function PrintIcon() {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <path d="M7 8V4h10v4" />
-      <path d="M6 17H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" />
-      <path d="M7 14h10v6H7z" />
-    </svg>
-  );
-}
-function SlidersIcon() {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <path d="M4 7h16M4 12h16M4 17h16" />
-      <circle cx="8" cy="7" r="2" />
-      <circle cx="15" cy="12" r="2" />
-      <circle cx="10" cy="17" r="2" />
-    </svg>
-  );
-}
-function PlusIcon() {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <path d="M12 5v14M5 12h14" />
-    </svg>
-  );
-}
-function EditorIcon() {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <rect x="4" y="4" width="16" height="12" rx="1" />
-      <path d="M8 20h8M9 9h6M9 12h4" />
-    </svg>
-  );
-}
-function ListIcon() {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <path d="M8 7h12M8 12h12M8 17h12" />
-      <circle cx="4.5" cy="7" r="1" />
-      <circle cx="4.5" cy="12" r="1" />
-      <circle cx="4.5" cy="17" r="1" />
-    </svg>
-  );
-}
-function UndoIcon() {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <path d="M8 8H4v4" />
-      <path d="M4 12a8 8 0 1 0 2.3-5.7" />
-    </svg>
-  );
-}
-function RedoIcon() {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <path d="M16 8h4v4" />
-      <path d="M20 12a8 8 0 1 1-2.3-5.7" />
-    </svg>
-  );
-}
-function ExpandIcon() {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <path d="M9 4H4v5M15 4h5v5M9 20H4v-5M15 20h5v-5" />
-    </svg>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          type="button"
+          variant={primary ? "default" : "ghost"}
+          size="icon"
+          className={cn("[&_svg]:size-[18px]", active && !primary && "bg-secondary")}
+          aria-label={title}
+          disabled={disabled}
+          onClick={onClick}
+        >
+          {children}
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent side="right">{title}</TooltipContent>
+    </Tooltip>
   );
 }

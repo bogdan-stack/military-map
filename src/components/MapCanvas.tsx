@@ -107,7 +107,7 @@ export function MapCanvas({ mapRef, mcoo }: { mapRef: MutableRefObject<Map | nul
       canvasContextAttributes: { preserveDrawingBuffer: true },
     });
     mapRef.current = map;
-    map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "top-right");
+    map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "bottom-right");
 
     map.on("load", () => {
       tint(map);

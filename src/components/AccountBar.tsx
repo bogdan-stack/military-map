@@ -1,6 +1,8 @@
 "use client";
 
 import { useState } from "react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { useMapStore } from "@/lib/store";
 
 const LABELS = {
@@ -51,11 +53,13 @@ export function AccountBar() {
       {persistence.email ? (
         <>
           <span className="account-email">{persistence.email}</span>
-          <button type="button" onClick={() => void persistence.signOut()}>
+          <Button type="button" variant="ghost" size="sm" onClick={() => void persistence.signOut()}>
             Sign out
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
+            variant="outline"
+            size="sm"
             aria-label="Copy this computer's map to your account"
             onClick={async () => {
               const error = await persistence.uploadLocal();
@@ -64,18 +68,20 @@ export function AccountBar() {
             }}
           >
             {persistence.status === "conflict" ? "Use this computer" : "Copy to account"}
-          </button>
+          </Button>
         </>
       ) : (
-        <button type="button" onClick={() => setOpen((value) => !value)}>
+        <Button type="button" variant="outline" size="sm" onClick={() => setOpen((value) => !value)}>
           Sign in
-        </button>
+        </Button>
       )}
       {persistence.offerUpload && (
         <span className="account-offer">
           Upload this browser&apos;s map to your account?
-          <button
+          <Button
             type="button"
+            variant="outline"
+            size="sm"
             aria-label="Copy this computer's map to your account"
             onClick={() =>
               void persistence.uploadLocal().then((error) => {
@@ -85,16 +91,16 @@ export function AccountBar() {
             }
           >
             Copy to account
-          </button>
-          <button type="button" onClick={persistence.dismissUpload}>
+          </Button>
+          <Button type="button" variant="ghost" size="sm" onClick={persistence.dismissUpload}>
             Not now
-          </button>
+          </Button>
         </span>
       )}
       {persistence.status === "conflict" && (
-        <button type="button" onClick={() => void persistence.reloadRemote()}>
+        <Button type="button" variant="outline" size="sm" onClick={() => void persistence.reloadRemote()}>
           Use saved map
-        </button>
+        </Button>
       )}
       {open && !persistence.email && (
         <form
@@ -104,7 +110,7 @@ export function AccountBar() {
             void submit("in");
           }}
         >
-          <input
+          <Input
             type="email"
             autoComplete="username"
             placeholder="Email"
@@ -113,7 +119,7 @@ export function AccountBar() {
             onChange={(event) => setEmail(event.target.value)}
             required
           />
-          <input
+          <Input
             type="password"
             autoComplete="current-password"
             placeholder="Password"
@@ -122,12 +128,12 @@ export function AccountBar() {
             onChange={(event) => setPassword(event.target.value)}
             required
           />
-          <button type="submit" disabled={busy}>
+          <Button type="submit" size="sm" disabled={busy}>
             Sign in
-          </button>
-          <button type="button" disabled={busy} onClick={() => void submit("up")}>
+          </Button>
+          <Button type="button" variant="outline" size="sm" disabled={busy} onClick={() => void submit("up")}>
             Create account
-          </button>
+          </Button>
         </form>
       )}
       {notice && <span className={`account-notice${noticeOk ? " ok" : ""}`}>{notice}</span>}

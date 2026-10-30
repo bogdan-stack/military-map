@@ -1,7 +1,10 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
+import { X } from "lucide-react";
 import type { Map } from "maplibre-gl";
+import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import { getCatalog, groupCatalog } from "@/lib/catalog";
 import { GROUNDS, MOVEMENTS, type GroundCondition, type MovementClass } from "@/lib/mcoo/classify";
 import { formatDistance, formatLatLng, parseCoordinate, pathLength, ringArea } from "@/lib/geo";
@@ -148,11 +151,11 @@ export function GalleryPanel() {
           MIL-STD Search
         </button>
         <button type="button" className="icon-x" onClick={() => dispatch({ type: "toggle-right", panel: "gallery" })} aria-label="Close">
-          ×
+          <X size={16} />
         </button>
       </div>
       <div className="search-line">
-        <input
+        <Input
           value={state.query}
           placeholder="Search MIL-STD-2525 symbols"
           onChange={(event) => dispatch({ type: "query", query: event.target.value })}
@@ -845,14 +848,7 @@ function McooLayerRow() {
           <strong>MCOO</strong>
           <small>{options.mcoo ? `${movement} · ${ground}` : "Off"}</small>
         </button>
-        <button
-          type="button"
-          role="switch"
-          className={`switch${options.mcoo ? " on" : ""}`}
-          aria-checked={options.mcoo}
-          aria-label="MCOO"
-          onClick={() => set({ mcoo: !options.mcoo })}
-        />
+        <Switch checked={options.mcoo} onCheckedChange={(checked) => set({ mcoo: checked })} aria-label="MCOO" />
       </div>
       {open && (
         <div className="overlay-details">
