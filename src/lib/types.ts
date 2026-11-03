@@ -110,7 +110,7 @@ export type Placing =
   | { mode: "symbol"; symbol: CatalogSymbol }
   | { mode: "generic"; kind: "pin" | "text" | "line" | "area" | "rect" | "circle" | "bean"; name: string };
 
-export type LeftPanel = "layers" | "active" | "print" | "options" | null;
+export type LeftPanel = "layers" | "active" | "print" | "options" | "account" | null;
 export type RightPanel = "gallery" | "editor" | "points" | null;
 
 export const EMPTY_MODIFIERS: Modifiers = {

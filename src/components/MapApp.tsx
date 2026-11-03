@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Box, Info, Layers, List, ListTree, Maximize2, Plus, Printer, Redo2, SlidersHorizontal, SquarePen, Undo2 } from "lucide-react";
+import { Box, Info, Layers, List, ListTree, LogIn, Maximize2, Plus, Printer, Redo2, SlidersHorizontal, SquarePen, Undo2, UserRound } from "lucide-react";
 import type { Map } from "maplibre-gl";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -10,7 +10,7 @@ import { cn } from "@/lib/utils";
 import { formatBearing, formatLatLng, parseCoordinate, bearingDeg } from "@/lib/geo";
 import { symbolContract } from "@/lib/symbols";
 import { MapStoreProvider, useMapStore } from "@/lib/store";
-import { AccountBar } from "./AccountBar";
+import { AccountBar, AccountPanel } from "./AccountBar";
 import { CommandPalette } from "./CommandPalette";
 import { MapCanvas } from "./MapCanvas";
 import {
@@ -36,7 +36,7 @@ export function MapApp() {
 }
 
 function Shell() {
-  const { state, dispatch } = useMapStore();
+  const { state, dispatch, persistence } = useMapStore();
   const mapRef = useRef<Map | null>(null);
   const [pitched, setPitched] = useState(false);
   const [search, setSearch] = useState("");
@@ -189,6 +189,15 @@ function Shell() {
         <Tool title="Full screen [F11]" onClick={toggleFullscreen}>
           <Maximize2 />
         </Tool>
+        {persistence.configured && (
+          <Tool
+            title={persistence.email ? "Account" : "Sign in"}
+            active={state.left === "account"}
+            onClick={() => dispatch({ type: "toggle-left", panel: "account" })}
+          >
+            {persistence.email ? <UserRound /> : <LogIn />}
+          </Tool>
+        )}
       </div>
 
       <div className="left-stack">
@@ -196,6 +205,7 @@ function Shell() {
         {state.left === "active" && <ActiveLayerPanel />}
         {state.left === "print" && <PrintPanel mapRef={mapRef} />}
         {state.left === "options" && <OptionsPanel />}
+        {state.left === "account" && <AccountPanel />}
       </div>
       {state.right === "gallery" && <GalleryPanel />}
       {state.right === "editor" && <EditorPanel />}

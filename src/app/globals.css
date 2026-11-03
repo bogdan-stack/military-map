@@ -465,9 +465,16 @@ a { color: #0b57d0; }
   box-shadow: var(--shadow);
 }
 .account-form input { width: 100%; }
-.account-email { color: var(--muted); max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.account-notice { color: var(--ink); }
+.account-email { color: var(--muted); margin: 0; overflow: hidden; text-overflow: ellipsis; }
+.account-notice { margin: 0; color: var(--ink); }
 .account-notice.ok { color: var(--success); }
+.account-status { margin: 0; color: var(--ui-muted); font-size: 13px; }
+.account-status.warn { color: var(--warning); }
+.account-fields { display: flex; flex-direction: column; align-items: stretch; gap: 10px; }
+.account-fields label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; font-weight: 500; color: var(--ui-muted); }
+.account-fields .account-fields { padding: 0; }
+.account-offer { display: flex; flex-direction: column; gap: 8px; }
+.account-offer p { margin: 0; font-size: 13px; }
 
 .anchor-handle {
   width: 14px;
