@@ -189,16 +189,17 @@ function Shell() {
         <Tool title="Full screen [F11]" onClick={toggleFullscreen}>
           <Maximize2 />
         </Tool>
-        {persistence.configured && (
-          <Tool
-            title={persistence.email ? "Account" : "Sign in"}
-            active={state.left === "account"}
-            onClick={() => dispatch({ type: "toggle-left", panel: "account" })}
-          >
-            {persistence.email ? <UserRound /> : <LogIn />}
-          </Tool>
-        )}
       </div>
+      {persistence.configured && (
+        <button
+          type="button"
+          className={`rail-signin${state.left === "account" ? " on" : ""}`}
+          onClick={() => dispatch({ type: "toggle-left", panel: "account" })}
+        >
+          {persistence.email ? <UserRound size={18} /> : <LogIn size={18} />}
+          <span>{persistence.email ? persistence.email : "Sign in"}</span>
+        </button>
+      )}
 
       <div className="left-stack">
         {state.left === "layers" && <LayersPanel />}

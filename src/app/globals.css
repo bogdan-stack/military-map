@@ -75,11 +75,32 @@ a { color: #0b57d0; }
   width: var(--rail);
   align-items: center;
   gap: 2px;
-  padding: 6px 0;
+  padding: 6px 0 56px;
   background: var(--ui-background);
   border-right: 1px solid var(--ui-border);
   overflow: auto;
 }
+.rail-signin {
+  position: absolute;
+  z-index: 6;
+  left: 8px;
+  bottom: calc(var(--dock) + 8px);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 40px;
+  max-width: 220px;
+  padding: 0 14px 0 12px;
+  border: 0;
+  border-radius: 8px;
+  background: #174ea6;
+  color: #fff;
+  font-size: 14px;
+  font-weight: 600;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.16), 0 6px 16px rgba(23, 78, 166, 0.35);
+}
+.rail-signin span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rail-signin.on { box-shadow: 0 0 0 2px #fff, 0 0 0 4px #174ea6; }
 .rail-spacer { flex: 1 0 8px; }
 
 .tool {
@@ -855,5 +876,5 @@ select:focus-visible {
 }
 
 @media print {
-  .rail, .panel, .hint, .placement-chip, .coord-search, .measure-chip, .account-bar, .map-dock, .left-stack, .toast, .palette-backdrop, .maplibregl-ctrl-bottom-right { display: none !important; }
+  .rail, .rail-signin, .panel, .hint, .placement-chip, .coord-search, .measure-chip, .account-bar, .map-dock, .left-stack, .toast, .palette-backdrop, .maplibregl-ctrl-bottom-right { display: none !important; }
 }
