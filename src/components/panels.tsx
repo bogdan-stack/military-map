@@ -9,6 +9,7 @@ import { getCatalog, groupCatalog } from "@/lib/catalog";
 import { GROUNDS, MOVEMENTS, type GroundCondition, type MovementClass } from "@/lib/mcoo/classify";
 import { formatDistance, formatLatLng, parseCoordinate, pathLength, ringArea } from "@/lib/geo";
 import { useMapStore } from "@/lib/store";
+import { exportMapPng } from "@/lib/export-map";
 import { affiliationColor, canScaleGraphic, FIELD, frameColor, graphicRotation, graphicScale, isBoundary, renderMeasurePreview, renderSymbol, shownCoordinates, symbolAllows, TEXT_MODIFIERS, toBasePoint } from "@/lib/symbols";
 import {
   AFFILIATIONS,
@@ -1121,8 +1122,8 @@ export function OptionsPanel() {
             <input type="range" min={0} max={200} value={options.chroma} onChange={(event) => set({ chroma: Number(event.target.value) })} />
           </label>
           <label className="check-row">
-            <input type="checkbox" checked={options.coordinateSearch} onChange={(event) => set({ coordinateSearch: event.target.checked })} />
-            Coordinate search
+            <input type="checkbox" checked={options.citySearch} onChange={(event) => set({ citySearch: event.target.checked })} />
+            City and coordinate search
           </label>
           <label className="check-row">
             <input type="checkbox" checked={options.measure} onChange={(event) => set({ measure: event.target.checked })} />
@@ -1172,6 +1173,7 @@ export function OptionsPanel() {
 export function PrintPanel({ mapRef }: { mapRef: MutableRefObject<Map | null> }) {
   const { dispatch } = useMapStore();
   const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
   return (
     <aside className="panel panel-left">
       <header className="panel-head">
@@ -1181,25 +1183,30 @@ export function PrintPanel({ mapRef }: { mapRef: MutableRefObject<Map | null> })
         </button>
       </header>
       <div className="panel-scroll">
-        <p>Download the current map view, symbols included.</p>
+        <p>Download the current map view, with every visible layer and its symbols.</p>
         <button
           type="button"
           className="primary"
+          disabled={busy}
           onClick={() => {
-            const canvas = mapRef.current?.getCanvas();
-            if (!canvas) return;
-            try {
-              const link = document.createElement("a");
-              link.href = canvas.toDataURL("image/png");
-              link.download = "mission-map.png";
-              link.click();
-              setError("");
-            } catch {
-              setError("The map canvas could not be exported. The tile host blocked the image read.");
-            }
+            const map = mapRef.current;
+            if (!map || busy) return;
+            setBusy(true);
+            setError("");
+            exportMapPng(map)
+              .then((href) => {
+                const link = document.createElement("a");
+                link.href = href;
+                link.download = "mission-map.png";
+                link.click();
+              })
+              .catch(() => {
+                setError("The map canvas could not be exported. The tile host blocked the image read.");
+              })
+              .finally(() => setBusy(false));
           }}
         >
-          Download PNG
+          {busy ? "Preparing PNG…" : "Download PNG"}
         </button>
         <button type="button" onClick={() => window.print()}>
           Print

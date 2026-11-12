@@ -10,22 +10,28 @@
     "import:local": "tsx scripts/import-localstorage.ts"
   },
   "dependencies": {
+    "@ai-sdk/openai-compatible": "^3.0.90",
     "@armyc2.c5isr.renderer/mil-sym-ts-web": "^2.10.9",
     "@mapbox/vector-tile": "^3.0.0",
+    "@napi-rs/canvas": "^1.1.1",
     "@radix-ui/react-slot": "^1.5.0",
     "@radix-ui/react-switch": "^1.4.1",
     "@radix-ui/react-tooltip": "^1.4.1",
     "@supabase/supabase-js": "^2.118.0",
+    "ai": "^7.0.170",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "lucide-react": "^1.65.0",
+    "mammoth": "^1.13.0",
     "maplibre-gl": "^5.6.1",
     "mgrs": "^2.1.0",
     "next": "^15.5.4",
     "pbf": "^5.1.2",
+    "pdfjs-dist": "^6.5.438",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
     "tailwind-merge": "^3.7.0",
+    "tesseract.js": "^7.0.0",
     "zod": "^4.6.7"
   },
   "devDependencies": {

@@ -8,9 +8,12 @@ import { Input } from "@/components/ui/input";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { formatBearing, formatLatLng, parseCoordinate, bearingDeg } from "@/lib/geo";
+import { searchPlaces, type Place } from "@/lib/places";
 import { symbolContract } from "@/lib/symbols";
 import { MapStoreProvider, useMapStore } from "@/lib/store";
 import { AccountBar, AccountPanel } from "./AccountBar";
+import { AppModes } from "./AppModes";
+import { PlanningCockpit } from "./PlanningCockpit";
 import { CommandPalette } from "./CommandPalette";
 import { MapCanvas } from "./MapCanvas";
 import {
@@ -27,21 +30,26 @@ import {
   SymbolMenu,
 } from "./panels";
 
-export function MapApp() {
+export function MapApp({ planningOpen = false }: { planningOpen?: boolean }) {
   return (
     <MapStoreProvider>
-      <Shell />
+      <Shell planningOpen={planningOpen} />
     </MapStoreProvider>
   );
 }
 
-function Shell() {
+function Shell({ planningOpen }: { planningOpen: boolean }) {
   const { state, dispatch, persistence } = useMapStore();
   const mapRef = useRef<Map | null>(null);
   const [pitched, setPitched] = useState(false);
   const [search, setSearch] = useState("");
   const [searchError, setSearchError] = useState("");
+  const [places, setPlaces] = useState<Place[]>([]);
+  const [placeOpen, setPlaceOpen] = useState(false);
+  const [placeActive, setPlaceActive] = useState(0);
+  const pickedPlace = useRef("");
   const [palette, setPalette] = useState(false);
+  const [planning, setPlanning] = useState(planningOpen);
   const mcoo = useMemo(
     () =>
       state.options.mcoo
@@ -95,6 +103,47 @@ function Shell() {
     return () => window.clearTimeout(timer);
   }, [dispatch, state.toast]);
 
+  useEffect(() => {
+    const text = search.trim();
+    if (!state.options.citySearch || text.length < 2 || text === pickedPlace.current || parseCoordinate(text)) {
+      setPlaces([]);
+      setPlaceOpen(false);
+      return;
+    }
+    const ctrl = new AbortController();
+    const timer = window.setTimeout(() => {
+      searchPlaces(text, ctrl.signal)
+        .then((found) => {
+          setPlaces(found);
+          setPlaceOpen(true);
+          setPlaceActive(0);
+          setSearchError(found.length ? "" : "No cities found.");
+        })
+        .catch((err: unknown) => {
+          if (err instanceof DOMException && err.name === "AbortError") return;
+          setPlaces([]);
+          setSearchError("Place search is unavailable.");
+          setPlaceOpen(true);
+        });
+    }, 280);
+    return () => {
+      ctrl.abort();
+      window.clearTimeout(timer);
+    };
+  }, [search, state.options.citySearch]);
+
+  const showPlace = (place: Place) => {
+    const map = mapRef.current;
+    if (!map) return;
+    pickedPlace.current = place.name;
+    if (place.bounds) map.fitBounds(place.bounds, { padding: 80, maxZoom: 14, duration: 900 });
+    else map.flyTo({ center: place.center, zoom: place.zoom });
+    setSearch(place.name);
+    setPlaces([]);
+    setPlaceOpen(false);
+    setSearchError("");
+  };
+
   const hint = placementHint(
     state.placing,
     state.options.measure,
@@ -109,9 +158,11 @@ function Shell() {
   return (
     <TooltipProvider>
     <div
-      className={`app${state.options.theme === "light" ? "" : " dark"}${state.options.theme === "night" ? " night" : ""}${state.options.showScale ? " show-scale" : ""}${leftCover ? " left-open" : ""}${state.right ? " right-open" : ""}`}
+      className={`app${state.options.theme === "light" ? "" : " dark"}${state.options.theme === "night" ? " night" : ""}${state.options.showScale ? " show-scale" : ""}${leftCover ? " left-open" : ""}${state.right ? " right-open" : ""}${planning ? " planning" : ""}`}
     >
       <MapCanvas mapRef={mapRef} mcoo={mcoo} />
+      <PlanningCockpit open={planning} />
+      <AppModes current={planning ? "plan" : "map"} onMap={() => setPlanning(false)} onPlan={() => setPlanning(true)} />
       <div className="rail rail-left">
         <Tool primary title="Add new symbol" active={state.right === "gallery"} onClick={() => dispatch({ type: "toggle-right", panel: "gallery" })}>
           <Plus />
@@ -189,17 +240,16 @@ function Shell() {
         <Tool title="Full screen [F11]" onClick={toggleFullscreen}>
           <Maximize2 />
         </Tool>
+        {persistence.configured && (
+          <Tool
+            title={persistence.email ? persistence.email : "Sign in"}
+            active={state.left === "account"}
+            onClick={() => dispatch({ type: "toggle-left", panel: "account" })}
+          >
+            {persistence.email ? <UserRound /> : <LogIn />}
+          </Tool>
+        )}
       </div>
-      {persistence.configured && (
-        <button
-          type="button"
-          className={`rail-signin${state.left === "account" ? " on" : ""}`}
-          onClick={() => dispatch({ type: "toggle-left", panel: "account" })}
-        >
-          {persistence.email ? <UserRound size={18} /> : <LogIn size={18} />}
-          <span>{persistence.email ? persistence.email : "Sign in"}</span>
-        </button>
-      )}
 
       <div className="left-stack">
         {state.left === "layers" && <LayersPanel />}
@@ -230,29 +280,76 @@ function Shell() {
         </div>
       )}
       <SymbolMenu />
-      {state.options.coordinateSearch && (
+      {state.options.citySearch && (
         <form
           className="coord-search"
           onSubmit={(event) => {
             event.preventDefault();
             const point = parseCoordinate(search);
-            if (!point) {
-              setSearchError("Use lat, lon or an MGRS grid.");
+            if (point) {
+              setSearchError("");
+              setPlaceOpen(false);
+              mapRef.current?.flyTo({ center: point, zoom: Math.max(mapRef.current.getZoom(), 11) });
               return;
             }
-            setSearchError("");
-            mapRef.current?.flyTo({ center: point, zoom: Math.max(mapRef.current.getZoom(), 11) });
+            const place = places[Math.min(placeActive, Math.max(0, places.length - 1))];
+            if (place) {
+              showPlace(place);
+              return;
+            }
+            setSearchError(search.trim().length < 2 ? "Type a city or a coordinate." : "No cities found.");
           }}
         >
           <Input
             value={search}
-            placeholder="Search a coordinate"
-            aria-label="Coordinate search"
-            className="w-[240px] border-0 shadow-none focus-visible:ring-0"
-            onChange={(event) => setSearch(event.target.value)}
+            placeholder="Search a city or coordinate"
+            aria-label="City or coordinate search"
+            aria-expanded={placeOpen}
+            aria-controls="place-results"
+            aria-autocomplete="list"
+            className="w-[280px] border-0 shadow-none focus-visible:ring-0"
+            onChange={(event) => {
+              pickedPlace.current = "";
+              setSearch(event.target.value);
+              setSearchError("");
+            }}
+            onKeyDown={(event) => {
+              if (!placeOpen || !places.length) return;
+              if (event.key === "ArrowDown") {
+                event.preventDefault();
+                setPlaceActive((index) => Math.min(places.length - 1, index + 1));
+              } else if (event.key === "ArrowUp") {
+                event.preventDefault();
+                setPlaceActive((index) => Math.max(0, index - 1));
+              } else if (event.key === "Escape") {
+                event.preventDefault();
+                event.stopPropagation();
+                setPlaceOpen(false);
+              }
+            }}
           />
           <Button type="submit" size="sm">Go</Button>
-          {searchError && <span>{searchError}</span>}
+          {placeOpen && (
+            <ul id="place-results" className="place-results" role="listbox">
+              {places.map((place, index) => (
+                <li key={place.id}>
+                  <button
+                    type="button"
+                    role="option"
+                    aria-selected={index === placeActive}
+                    onMouseEnter={() => setPlaceActive(index)}
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => showPlace(place)}
+                  >
+                    {place.name}
+                    {place.detail && <small>{place.detail}</small>}
+                  </button>
+                </li>
+              ))}
+              {!places.length && <li className="place-empty">{searchError || "No cities found."}</li>}
+            </ul>
+          )}
+          {searchError && !placeOpen && <span className="place-error">{searchError}</span>}
         </form>
       )}
       <div className="map-dock">

@@ -530,13 +530,20 @@ export function frameColor(code: string) {
   return "#80E0FF";
 }
 
-function paintAffiliation(features: Feature[], affiliation: string): Feature[] {
-  const color = frameColor(affiliation);
+/** Maneuver line with a friendly trace and an enemy trace on the upper side. */
+export function isLineOfContact(graphic: { basicId?: string }) {
+  return (graphic.basicId || "").replace(/\D/g, "").padEnd(8, "0").slice(0, 8) === "25140200";
+}
+
+function paintAffiliation(features: Feature[], graphic: Pick<Graphic, "affiliation" | "basicId" | "coordinates">): Feature[] {
+  const color = frameColor(graphic.affiliation);
+  const enemy = frameColor("H");
+  const upper = isLineOfContact(graphic) ? upperContactLine(features, graphic.coordinates) : null;
   return features.map((feature) => ({
     ...feature,
     properties: {
       ...(feature.properties || {}),
-      strokeColor: color,
+      strokeColor: feature === upper ? enemy : color,
       fontColor: "#000000",
       ...(feature.properties?.fillColor ? { fillColor: color } : {}),
     },
@@ -548,7 +555,7 @@ export function renderControlMeasure(graphic: Graphic, view: ViewOptions, frame:
   const shown = { ...graphic, coordinates: shownCoordinates(graphic) };
   const features = renderMeasureFeatures(shown, view, frame) ?? renderMeasureFeatures(shown, view, frameAround(shown.coordinates, frame));
   if (!features?.length) return null;
-  const painted = paintAffiliation(features, graphic.affiliation).map((feature) => {
+  const painted = paintAffiliation(features, graphic).map((feature) => {
     const dash = feature.properties?.strokeDasharray;
     return {
       ...feature,
@@ -633,7 +640,7 @@ export function renderMeasurePreview(graphic: Graphic, view: ViewOptions): strin
   const frame = { west: 0, south: 0, east: 10, north: 6, width: 220, height: 140 };
   const features = renderMeasureFeatures({ ...graphic, id: "preview", coordinates, modifiers }, view, frame);
   const svg = features
-    ? featuresToSvg(styleBoundary(attachLabelRotation(paintAffiliation(features, graphic.affiliation)), graphic, frame))
+    ? featuresToSvg(styleBoundary(attachLabelRotation(paintAffiliation(features, graphic)), graphic, frame))
     : null;
   previewCache.set(key, svg);
   return svg;
@@ -723,6 +730,31 @@ function lineParts(geometry: Feature["geometry"]): Position[][] {
   if (geometry.type === "LineString") return [geometry.coordinates as Position[]];
   if (geometry.type === "MultiLineString") return geometry.coordinates as Position[][];
   return [];
+}
+
+/** The trace on the left of the drawn direction. That is the enemy side of a line of contact. */
+function upperContactLine(features: Feature[], coordinates: [number, number][]): Feature | null {
+  const lines = features.filter((feature) => lineParts(feature.geometry).length);
+  if (lines.length < 2 || coordinates.length < 2) return null;
+  const start = coordinates[0];
+  const end = coordinates[coordinates.length - 1];
+  const dx = end[0] - start[0];
+  const dy = end[1] - start[1];
+  const mid: [number, number] = [(start[0] + end[0]) / 2, (start[1] + end[1]) / 2];
+  let best: Feature | null = null;
+  let bestSide = -Infinity;
+  for (const line of lines) {
+    const points = lineParts(line.geometry).flat();
+    if (!points.length) continue;
+    const lng = points.reduce((sum, point) => sum + point[0], 0) / points.length;
+    const lat = points.reduce((sum, point) => sum + point[1], 0) / points.length;
+    const side = (lng - mid[0]) * -dy + (lat - mid[1]) * dx;
+    if (side > bestSide) {
+      bestSide = side;
+      best = line;
+    }
+  }
+  return best;
 }
 
 function openBoundaryLine(parts: Position[][], mark: string, frame: MapFrame) {

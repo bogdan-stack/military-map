@@ -89,6 +89,7 @@ export type ViewOptions = {
   hue: number;
   chroma: number;
   coordinateSearch: boolean;
+  citySearch: boolean;
   measure: boolean;
   cursorCoordinate: boolean;
   showScale: boolean;
@@ -141,6 +142,7 @@ export const DEFAULT_OPTIONS: ViewOptions = {
   hue: 0,
   chroma: 100,
   coordinateSearch: false,
+  citySearch: true,
   measure: false,
   cursorCoordinate: true,
   showScale: true,
